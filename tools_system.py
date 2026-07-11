@@ -32,14 +32,27 @@ def configure(confirm=None):
 # --- low-level helpers (blocking; run via asyncio.to_thread, stubbable in tests) ---
 
 def _volume_endpoint():
-    """Return the Windows master-volume COM interface (pycaw)."""
+    """Return the Windows master-volume COM interface (pycaw).
+
+    Handles both pycaw APIs: modern pycaw returns an AudioDevice wrapper from
+    GetSpeakers() (with .EndpointVolume ready to use); old pycaw returned a raw
+    IMMDevice needing Activate(). Runs inside asyncio.to_thread, so make sure COM
+    is initialised in this thread."""
     try:
-        from ctypes import POINTER, cast
-        from comtypes import CLSCTX_ALL
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        import comtypes
+        from pycaw.pycaw import AudioUtilities
     except ImportError as e:
         raise RuntimeError("pycaw not installed — run: pip install pycaw") from e
+    try:
+        comtypes.CoInitialize()  # worker threads don't inherit COM init
+    except Exception:
+        pass
     devices = AudioUtilities.GetSpeakers()
+    if hasattr(devices, "EndpointVolume"):  # modern pycaw AudioDevice wrapper
+        return devices.EndpointVolume
+    from ctypes import POINTER, cast
+    from comtypes import CLSCTX_ALL
+    from pycaw.pycaw import IAudioEndpointVolume
     interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
 
