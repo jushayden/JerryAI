@@ -3,6 +3,8 @@
 Manual PTB v22 init — main.py owns the event loop, never app.run_polling().
 """
 import asyncio
+import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -19,6 +21,7 @@ from telegram.ext import (
 )
 
 import config
+import profile_store
 import state
 from state import TaskRecord
 
@@ -30,6 +33,7 @@ _allowed_chat_id: int = config.ALLOWED_CHAT_ID
 _pending_confirms: dict[str, asyncio.Future] = {}  # cid -> Future[bool]
 _pending_ask: asyncio.Future | None = None  # Future[str] resolved by next plain text
 _pending_secret: tuple[asyncio.Future, str, str, str | None] | None = None
+_pending_setup: asyncio.Future | None = None  # Future[str] resolved by the onboarding reply
 _status_cards: dict[str, dict] = {}  # task.id -> {msg_id, last, pending, flusher}
 
 
@@ -328,7 +332,97 @@ def _is_allowed(update: Update) -> bool:
     return chat is not None and _allowed_chat_id != 0 and chat.id == _allowed_chat_id
 
 
+# --- file upload helpers (pure, no Telegram objects — unit-testable) ---
+_UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL",
+                   *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+# \b treats "_" as a word char, which would miss "my_resume.pdf" — use an explicit
+# non-alnum/start/end boundary instead so underscore/hyphen/dot separators all count.
+_RESUME_HINT_RE = re.compile(r"(?:^|[^a-z0-9])(resum[eé]|cv)(?:$|[^a-z0-9])", re.I)
+_MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # Telegram Bot API can't fetch files bigger than this
+_UPLOAD_RECENCY_SECS = 48 * 3600
+
+
+def _sanitize_filename(name: str, fallback_ext: str = "") -> str:
+    """Strip path traversal / unsafe chars / reserved names. Never trust file_name as a path."""
+    name = Path((name or "").strip()).name or f"upload{fallback_ext}"  # .name kills traversal
+    name = _UNSAFE_CHARS.sub("_", name).strip(" .")
+    if not name:
+        name = f"upload{fallback_ext}"
+    stem, ext = os.path.splitext(name)
+    if len(name) > 150:
+        name = stem[: 150 - len(ext)] + ext
+        stem, ext = os.path.splitext(name)
+    if stem.upper() in _RESERVED_NAMES:
+        name = f"_{name}"
+    return name
+
+
+def _dedupe_path(directory: Path, filename: str) -> Path:
+    candidate = directory / filename
+    if not candidate.exists():
+        return candidate
+    stem, ext = os.path.splitext(filename)
+    i = 1
+    while True:
+        candidate = directory / f"{stem} ({i}){ext}"
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
+def _extract_file_meta(msg):
+    """Resolve the Telegram attachment object + a suggested filename, or (None, None)."""
+    if msg.document:
+        return msg.document, msg.document.file_name or "document"
+    if msg.photo:
+        p = msg.photo[-1]  # largest size
+        return p, f"photo_{p.file_unique_id}.jpg"
+    if msg.audio:
+        return msg.audio, msg.audio.file_name or f"audio_{msg.audio.file_unique_id}.mp3"
+    if msg.voice:
+        return msg.voice, f"voice_{msg.voice.file_unique_id}.ogg"
+    if msg.video:
+        return msg.video, msg.video.file_name or f"video_{msg.video.file_unique_id}.mp4"
+    return None, None
+
+
+def _looks_like_resume(filename: str, caption: str | None) -> bool:
+    hay = f"{filename} {caption or ''}"
+    return bool(_RESUME_HINT_RE.search(hay)) and Path(filename).suffix.lower() in {".pdf", ".doc", ".docx"}
+
+
+def _with_upload_context(text: str) -> str:
+    """Point 'it'/'that file' at the most recent upload, if one is recent and still exists."""
+    extra = profile_store.load()
+    path, ts = extra.get("last_upload"), extra.get("last_upload_ts")
+    if not path or not ts:
+        return text
+    try:
+        age = time.time() - float(ts)
+    except ValueError:
+        return text
+    if age > _UPLOAD_RECENCY_SECS or not Path(path).is_file():
+        return text
+    return f"{text}\n(Most recently uploaded file: {path})"
+
+
 # --- handlers ---
+_SETUP_PROMPT = (
+    "Quick one-time setup — reply with your name, age, email, and phone, comma-separated "
+    "(use \"-\" to skip any), e.g.:\nAlex Kim, 24, alex@example.com, 555-010-4477\n"
+    "Or send /skip to do this later with /remember."
+)
+
+
+async def _maybe_start_onboarding(update: Update) -> None:
+    global _pending_setup
+    if profile_store.load().get("onboarded") == "yes" or _pending_setup is not None:
+        return
+    _pending_setup = asyncio.get_running_loop().create_future()
+    await update.message.reply_text(_SETUP_PROMPT)
+
+
 async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global _allowed_chat_id
     chat_id = update.effective_chat.id
@@ -337,12 +431,92 @@ async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _write_env_chat_id(chat_id)
         state.log_event({"event": "owner_captured", "chat_id": chat_id})
         await update.message.reply_text("You're registered as owner")
+        await _maybe_start_onboarding(update)
         return
     if chat_id != _allowed_chat_id:
         return
     await update.message.reply_text(
         "Pocket Agent ready. Send a task, "
         "/brief, /status, /cancel.")
+    await _maybe_start_onboarding(update)
+
+
+async def _on_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _pending_setup
+    if not _is_allowed(update):
+        return
+    _pending_setup = asyncio.get_running_loop().create_future()
+    await update.message.reply_text(_SETUP_PROMPT)
+
+
+async def _on_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _pending_setup
+    if not _is_allowed(update):
+        return
+    if _pending_setup is not None and not _pending_setup.done():
+        _pending_setup.cancel()
+    _pending_setup = None
+    profile_store.upsert("onboarded", "yes")
+    await update.message.reply_text("Skipped — fill this in anytime with /remember.")
+
+
+async def _handle_setup_reply(update: Update, text: str) -> None:
+    global _pending_setup
+    fut, _pending_setup = _pending_setup, None
+    if fut is not None and not fut.done():
+        fut.set_result(text)
+
+    parts = [p.strip() for p in text.split(",")]
+    fields = ("name", "age", "email", "phone")
+    parsed: dict[str, str] = {}
+    problems: list[str] = []
+    for i, field in enumerate(fields):
+        val = parts[i] if i < len(parts) else ""
+        if val in ("", "-"):
+            continue
+        if field == "age" and not (val.isdigit() and 0 < int(val) < 130):
+            problems.append(f"age '{val}' skipped")
+            continue
+        if field == "email" and ("@" not in val or "." not in val.split("@")[-1]):
+            problems.append(f"email '{val}' skipped")
+            continue
+        if field == "phone" and len(re.sub(r"\D", "", val)) < 7:
+            problems.append(f"phone '{val}' skipped")
+            continue
+        parsed[field] = val
+
+    for k, v in parsed.items():
+        profile_store.upsert(k, v)
+    profile_store.upsert("onboarded", "yes")  # one-time, even on a bad/partial reply
+    state.log_event({"event": "onboarding_completed", "fields": sorted(parsed)})
+
+    msg = (f"Saved: {', '.join(f'{k}={v}' for k, v in parsed.items())}."
+           if parsed else "Didn't save anything usable.")
+    if problems:
+        msg += " " + " / ".join(problems)
+    msg += " Fix anytime with /remember key: value."
+    await update.message.reply_text(msg)
+
+
+async def _on_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    data = {k: v for k, v in profile_store.load().items() if k != "onboarded"}
+    if not data:
+        await update.message.reply_text("Nothing remembered yet.")
+        return
+    await update.message.reply_text("\n".join(f"{k}: {v}" for k, v in sorted(data.items())))
+
+
+async def _on_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    key = (update.message.text or "").partition(" ")[2].strip()
+    if not key:
+        await update.message.reply_text("Usage: /forget key")
+        return
+    ok = profile_store.delete(key)
+    await update.message.reply_text(f"Forgot '{key}'." if ok else f"Didn't have '{key}'.")
 
 
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -365,13 +539,61 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             fut.set_result(handle)
         return
+    if _pending_setup is not None:
+        await _handle_setup_reply(update, text)
+        return
     if _pending_ask is not None and not _pending_ask.done():
         fut, _pending_ask = _pending_ask, None
         fut.set_result(text)
         return
+    text = _with_upload_context(text)
     ahead = state.queue.qsize() + (1 if state.current is not None else 0)
     task = state.new_task(text, origin="telegram")
     await update.message.reply_text(f"Queued as task {task.id} ({ahead} ahead of it)")
+
+
+async def _on_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    msg = update.message
+    tg_obj, suggested_name = _extract_file_meta(msg)
+    if tg_obj is None:
+        return
+    size = getattr(tg_obj, "file_size", None)
+    if size is not None and size > _MAX_UPLOAD_BYTES:
+        await update.message.reply_text(
+            f"That's {size / 1_048_576:.1f} MB — Telegram bots can only fetch files up to "
+            "20 MB. Send a smaller file, or share a direct link instead.")
+        return
+    file = await _retry(context.bot.get_file, tg_obj.file_id)
+    if file is None:
+        await update.message.reply_text("Couldn't download that after a few tries — please resend.")
+        return
+    config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = _sanitize_filename(suggested_name)
+    dest = _dedupe_path(config.UPLOAD_DIR, safe_name)
+    ok = await _retry(file.download_to_drive, custom_path=str(dest))
+    if ok is None:
+        await update.message.reply_text("Download failed partway through — please resend.")
+        return
+
+    state.log_event({"event": "upload_saved", "path": str(dest), "size": size})
+    profile_store.upsert("last_upload", str(dest))
+    profile_store.upsert("last_upload_ts", str(time.time()))
+    if _looks_like_resume(safe_name, msg.caption):
+        profile_store.upsert("resume_path", str(dest))
+
+    caption = (msg.caption or "").strip()
+    if caption:
+        text = f"{caption}\n(Uploaded file available at: {dest})"
+        ahead = state.queue.qsize() + (1 if state.current is not None else 0)
+        task = state.new_task(text, origin="telegram")
+        await update.message.reply_text(
+            f"Saved {safe_name} and queued as task {task.id} ({ahead} ahead of it).")
+    else:
+        await update.message.reply_text(
+            f"Saved {safe_name}. Say what to do with it whenever you're ready — "
+            "I'll remember it as your most recent upload.")
 
 
 async def _on_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -392,7 +614,7 @@ async def _on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _pending_ask, _pending_secret
+    global _pending_ask, _pending_secret, _pending_setup
     if not _is_allowed(update):
         return
     for cid in list(_pending_confirms):
@@ -402,6 +624,9 @@ async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if _pending_ask is not None and not _pending_ask.done():
         _pending_ask.cancel()
     _pending_ask = None
+    if _pending_setup is not None and not _pending_setup.done():
+        _pending_setup.cancel()
+    _pending_setup = None
     if _pending_secret is not None:
         fut = _pending_secret[0]
         if not fut.done():
@@ -452,8 +677,7 @@ async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Usage: /remember key: value")
         return
     try:
-        with open(config.PROFILE_EXTRA_PATH, "a", encoding="utf-8") as f:
-            f.write(f"{key}: {value}\n")
+        profile_store.upsert(key, value)
         state.log_event({"event": "remember", "key": key})
         await update.message.reply_text(f"Got it — I'll remember {key} = {value}.")
     except Exception as e:
@@ -556,7 +780,15 @@ async def start_bridge() -> None:
     app.add_handler(CommandHandler("news", _on_news))
     app.add_handler(CommandHandler("remember", _on_remember))
     app.add_handler(CommandHandler("testconfirm", _on_testconfirm))
+    app.add_handler(CommandHandler("setup", _on_setup))
+    app.add_handler(CommandHandler("skip", _on_skip))
+    app.add_handler(CommandHandler("memory", _on_memory))
+    app.add_handler(CommandHandler("forget", _on_forget))
     app.add_handler(CallbackQueryHandler(_on_callback, pattern=r"^cfm:"))
+    app.add_handler(MessageHandler(
+        (filters.Document.ALL | filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.VOICE)
+        & ~filters.COMMAND,
+        _on_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text))
     await app.initialize()
     await app.start()
