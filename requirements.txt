@@ -4,3 +4,4 @@ playwright>=1.60
 pyyaml
 python-dotenv
 mss
+faster-whisper

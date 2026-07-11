@@ -61,10 +61,12 @@ On your phone: message your bot, `/start` once, then just send it tasks. See REA
 ```
 python test_state.py
 python test_tools_fs.py
+python test_voice.py     # offline — stubs Whisper, no model/network
 python test_browser.py   # opens a visible Chromium window
 ```
 
-Run these before opening a PR if you touched `state.py`, `tools_fs.py`, or `tools_browser.py`.
+Run these before opening a PR if you touched `state.py`, `tools_fs.py`, `voice.py`,
+or `tools_browser.py`.
 
 ## 7. Code conventions (keep it lean — hackathon project)
 

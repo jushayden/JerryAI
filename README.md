@@ -99,6 +99,19 @@ On your phone: `/start` once (registers you as owner), then just text tasks.
 - `/brief` · `/status` · `/cancel` · `/testconfirm`
 - `!task text` — pre-authorized (skips approval gates)
 
+## Talk to it (voice messages)
+
+Send a **Telegram voice note** instead of typing — hold the mic, say your task, release.
+It's transcribed **on-device** with faster-whisper (local, no cloud, same as the model),
+the agent echoes back `🎙️ heard: …` so you can see what it understood, then runs it exactly
+like a typed task (risky actions still hit the approval gate). Works for answering the
+agent's questions too — just reply with your voice.
+
+- Configure via `.env` if you want: `WHISPER_MODEL` (`tiny`/`base`/`small`/`medium`/`large-v3`,
+  default `base`), `WHISPER_DEVICE` (`auto`/`cpu`/`cuda`), `WHISPER_COMPUTE` (`int8`/`float16`).
+- The **first** voice note loads the model (downloads ~150 MB for `base`) and is slow — send
+  one to warm it up before a demo. Later ones are fast, especially on GPU.
+
 ## Co-drive your real browser (the app-filler demo)
 
 For real sites (job applications, signups) the agent works **inside your own Edge session**
@@ -142,5 +155,6 @@ and cooperative sites; weaker on bot-shielded ones).
 
 ## Tests
 
-`python test_state.py` · `python test_tools_fs.py` · `python test_browser.py`
-(browser test opens a visible Chromium window and drives the mock form end to end)
+`python test_state.py` · `python test_tools_fs.py` · `python test_voice.py` · `python test_browser.py`
+(voice test is offline — stubs Whisper, no model/network; browser test opens a visible
+Chromium window and drives the mock form end to end)
