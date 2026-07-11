@@ -80,37 +80,37 @@ async def main():
     print("PASS set_brightness clamps")
 
     # --- lock + media pass through, ungated ---
-    tools_system.configure(confirm=boom, preauth=False)  # boom = fail if a gate fires
+    tools_system.configure(confirm=boom)  # boom = fail if a gate fires
     assert (await tools_system.lock_pc({})) == "Locked." and calls["lock"] is True
     assert (await tools_system.media_control({"action": "playpause"})) == "media playpause"
     assert calls["media"] == "playpause"
     print("PASS lock + media are ungated")
 
     # --- power_action: invalid action ---
-    tools_system.configure(confirm=allow, preauth=False)
+    tools_system.configure(confirm=allow)
     assert (await tools_system.power_action({"action": "explode"})).startswith("Error")
     assert "power" not in calls
     print("PASS power_action rejects unknown action")
 
     # --- power_action: gated (deny blocks, approve runs) ---
-    tools_system.configure(confirm=deny, preauth=False)
+    tools_system.configure(confirm=deny)
     r = await tools_system.power_action({"action": "shutdown"})
     assert r.startswith("User DENIED") and "power" not in calls, r
-    tools_system.configure(confirm=allow, preauth=False)
+    tools_system.configure(confirm=allow)
     r = await tools_system.power_action({"action": "shutdown", "delay": 5})
     assert r == "power shutdown" and calls["power"] == ("shutdown", 5), (r, calls.get("power"))
     print("PASS power_action gated (deny blocks, approve runs w/ delay)")
 
-    # --- power_action: preauthorized skips the gate ---
+    # --- power_action: sleep is gated too (approve runs) ---
     calls.clear()
-    tools_system.configure(confirm=boom, preauth=True)
+    tools_system.configure(confirm=allow)
     assert (await tools_system.power_action({"action": "sleep"})) == "power sleep"
     assert calls["power"] == ("sleep", 0)
-    print("PASS power_action preauthorized -> no confirm")
+    print("PASS power_action sleep gated (approve runs)")
 
     # --- cancel is ungated even mid-gate ---
     calls.clear()
-    tools_system.configure(confirm=boom, preauth=False)
+    tools_system.configure(confirm=boom)
     assert (await tools_system.power_action({"action": "cancel"})) == "power cancel"
     assert calls["power"] == ("cancel", 0)
     print("PASS power_action cancel is ungated")

@@ -47,20 +47,42 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         finally:
             task.needs = None
 
+    async def secret_cb(question: str, *, kind: str, domain: str):
+        task.needs = f"{kind} required for {domain or 'the current page'}"
+        try:
+            return await bridge.request_secret(
+                question, kind=kind, domain=domain, task_id=task.id)
+        finally:
+            task.needs = None
+
+    async def audit_cb(category: str, action: str, details=None, *, ok=None):
+        state.audit_event(task, category, action, details, ok=ok)
+
     recent = [t for t in state.tasks
               if t.id != task.id and t.status in ("done", "failed", "needs_attention", "cancelled")][-5:]
     history = "\n".join(
         f'- [{t.status}] "{t.text}" -> {(t.result or t.needs or "no result")[:200]}'
         for t in recent)
 
-    tools_browser.configure(confirm=bridge.confirm, preauth=task.preauthorized)
-    tools_system.configure(confirm=bridge.confirm, preauth=task.preauthorized)
+    tools_browser.configure(
+        confirm=bridge.confirm,
+        task=task,
+        secret_resolver=bridge.consume_secret,
+    )
+    tools_system.configure(confirm=bridge.confirm)
+    prompt = task.text
+    if task.source_url:
+        prompt += (
+            f"\n(The J badge was used on this exact page: {task.source_url}. "
+            "Act on that existing tab first.)"
+        )
     result = await agent.run_task(
-        task.text,
-        preauthorized=task.preauthorized,
+        prompt,
         status_cb=status_cb,
         ask_user_cb=ask_cb,
         confirm_cb=bridge.confirm,
+        request_secret_cb=secret_cb,
+        audit_cb=audit_cb,
         extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS, **tools_system.TOOLS},
         history=history,
     )
@@ -116,6 +138,7 @@ async def main() -> None:
         print("WARNING: tasks will fail until Ollama is running and the model is pulled")
 
     bridge.set_agent(_run_real_agent)
+    server.configure(task_created_cb=bridge.notify_task_accepted)
     await bridge.start_bridge()
     await server.start_server()
     print(f"J-badge endpoint: http://127.0.0.1:{config.LOCAL_PORT}")

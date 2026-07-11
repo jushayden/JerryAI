@@ -21,14 +21,12 @@ async def _default_confirm(summary: str) -> bool:
     return ans.strip().lower() in ("y", "yes")
 
 confirm_cb = _default_confirm
-preauthorized = False
 
 
-def configure(confirm=None, preauth=False):
-    """Set the confirmation callback and preauthorization flag for power actions."""
-    global confirm_cb, preauthorized
+def configure(confirm=None):
+    """Set the confirmation callback used to gate power actions (mirrors tools_fs)."""
+    global confirm_cb
     confirm_cb = confirm if confirm is not None else _default_confirm
-    preauthorized = preauth
 
 
 # --- low-level helpers (blocking; run via asyncio.to_thread, stubbable in tests) ---
@@ -194,10 +192,9 @@ async def power_action(args: dict) -> str:
         delay = max(0, min(600, int(args.get("delay") or (0 if action == "sleep" else 15))))
         verb = {"sleep": "Sleep", "shutdown": "Shut down", "restart": "Restart"}[action]
         summary = f"{verb} this PC" + ("" if action == "sleep" else f" in {delay}s")
-        if not preauthorized:
-            ok = await confirm_cb(summary)
-            if not ok:
-                return f"User DENIED the {action}. Do not retry."
+        ok = await confirm_cb(summary)
+        if not ok:
+            return f"User DENIED the {action}. Do not retry."
         return await asyncio.to_thread(_power_sync, action, delay)
     except Exception as e:
         return f"Error: {e}"
