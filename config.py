@@ -70,6 +70,10 @@ SCREENSHOT_DIR = PROJECT_ROOT / "screenshots"
 ARTIFACT_DIR = PROJECT_ROOT / "artifacts"
 DOWNLOAD_DIR = ARTIFACT_DIR / "downloads"
 
+# --- Scheduler ---
+SCHEDULE_PATH = PROJECT_ROOT / "schedules.json"  # persisted recurring tasks
+SCHEDULER_TICK = 30  # seconds between due-job checks
+
 # --- Co-drive: attach to the user's real Edge via CDP when available ---
 CDP_PORT = 9222
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"

@@ -61,6 +61,7 @@ On your phone: message your bot, `/start` once, then just send it tasks. See REA
 ```
 python test_state.py
 python test_tools_fs.py
+python test_schedule.py      # offline — deterministic, no Telegram/network
 python test_remote_operator.py
 python test_vision.py
 python test_browser.py   # opens a visible Chromium window
@@ -69,7 +70,8 @@ python test_browser.py   # opens a visible Chromium window
 Manual network/model checks: `python test_live_vlm.py` and, after completing any site
 verification in co-drive Edge, `python test_real_site.py --co-drive`.
 
-Run these before opening a PR if you touched task state, Telegram, safety gates, or browser tools.
+Run these before opening a PR if you touched task state, Telegram, safety gates, browser
+tools, or `schedule.py`.
 
 ## 7. Code conventions (keep it lean — hackathon project)
 
