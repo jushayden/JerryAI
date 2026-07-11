@@ -3,6 +3,8 @@
 Manual PTB v22 init — main.py owns the event loop, never app.run_polling().
 """
 import asyncio
+import os
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -20,6 +22,7 @@ from telegram.ext import (
 
 import config
 import state
+import voice
 from state import TaskRecord
 
 # --- module state ---
@@ -346,11 +349,10 @@ async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/brief, /status, /cancel.")
 
 
-async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _dispatch_text(text: str, update: Update | None = None) -> None:
+    """Route a user message (typed OR transcribed from voice): fulfil a pending secret,
+    answer a pending question, or queue a new task."""
     global _pending_ask, _pending_secret
-    if not _is_allowed(update):
-        return
-    text = update.message.text
     if _pending_secret is not None:
         fut, kind, domain, task_id = _pending_secret
         _pending_secret = None
@@ -372,7 +374,48 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     ahead = state.queue.qsize() + (1 if state.current is not None else 0)
     task = state.new_task(text, origin="telegram")
-    await update.message.reply_text(f"Queued as task {task.id} ({ahead} ahead of it)")
+    reply = f"Queued as task {task.id} ({ahead} ahead of it)"
+    if update is not None:
+        await update.message.reply_text(reply)
+    else:
+        await send_text(reply)
+
+
+async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    await _dispatch_text(update.message.text, update)
+
+
+async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Transcribe a Telegram voice message locally, then run it like a typed task."""
+    if not _is_allowed(update):
+        return
+    v = update.message.voice
+    if v is None:
+        return
+    await update.message.reply_text("🎧 transcribing…")
+    tmp = os.path.join(tempfile.gettempdir(), f"pa_voice_{v.file_unique_id}.ogg")
+    try:
+        f = await context.bot.get_file(v.file_id)
+        await f.download_to_drive(tmp)
+        text = await voice.transcribe(tmp)
+    except Exception as e:
+        await update.message.reply_text(f"Couldn't handle that voice message: {e}")
+        return
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if text.startswith("Error"):
+        await update.message.reply_text(text)
+        return
+    if not text.strip():
+        await update.message.reply_text("Couldn't make out any speech — try again.")
+        return
+    await update.message.reply_text(f"🎙️ heard: {state.redact_text(text)}")
+    await _dispatch_text(text, update)
 
 
 async def _on_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -544,6 +587,7 @@ async def start_bridge() -> None:
     app.add_handler(CommandHandler("remember", _on_remember))
     app.add_handler(CommandHandler("testconfirm", _on_testconfirm))
     app.add_handler(CallbackQueryHandler(_on_callback, pattern=r"^cfm:"))
+    app.add_handler(MessageHandler(filters.VOICE, _on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text))
     await app.initialize()
     await app.start()
