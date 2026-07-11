@@ -270,7 +270,11 @@ async def _look_at_page_impl(question: str, browser_session):
             Path(path).unlink(missing_ok=True)
 
 
-EXCLUDED_ACTIONS = ["evaluate", "write_file", "replace_file", "read_file", "save_as_pdf"]
+# switch/close are excluded so the sub-agent physically cannot jump to (or close) the
+# user's own tabs: it works only in the tab it starts in and tabs it opens itself —
+# browser-use auto-follows its own new tabs, so no switch action is needed for that.
+EXCLUDED_ACTIONS = ["evaluate", "write_file", "replace_file", "read_file", "save_as_pdf",
+                    "switch", "close"]
 REPLACED_ACTIONS = ["click", "send_keys"]
 
 
@@ -317,11 +321,12 @@ NOT click the field first, and never mistake a field's greyed placeholder text f
 button. Click is only for buttons, links, checkboxes, radios, and menu items.
 
 You are working inside the owner's REAL browser: other tabs from their own browsing may
-be open. IGNORE every pre-existing tab and its content completely — they are NOT part of
-your task. Never let an open tab change your goal. Your FIRST action must be `navigate`
-(new_tab=true) to the page your task needs; if the task names no page, navigate to a
-search engine. Re-read your task before every step; if the current page does not serve
-it, navigate back to one that does.
+be open, and you CANNOT switch to or close them. Work ONLY in your own tab; open a new
+tab (navigate with new_tab=true) when you need another page side by side. IGNORE every
+pre-existing tab and its content completely — they are NOT part of your task. Your FIRST
+action must be `navigate` to the page your task needs; if the task names no page,
+navigate to a search engine. Re-read your task before every step; if the current page
+does not serve it, navigate back to one that does.
 
 Rules from the owner (non-negotiable):
 - You will never be given passwords, one-time codes, or payment card numbers, and you

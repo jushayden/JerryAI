@@ -208,10 +208,94 @@ async def ask_user(question: str) -> str:
 
 
 # --- status card ---
-def _render_status(task: TaskRecord) -> str:
-    lines = [f"▶️ [{task.origin}] {state.redact_text(task.text)}"]
-    lines += [f"→ {s}" for s in task.steps[-6:]]
+_SPIN = "🌑🌒🌓🌔🌕🌖🌗🌘"  # phases advance every ticker beat -> a live loading animation
+
+_FRIENDLY_STEPS = {
+    "browser_goto": "🌐 opening", "read_page": "📖 reading the page",
+    "extract_form_fields": "🔎 scanning the form", "find_elements": "🔎 finding controls",
+    "fill_field": "✏️ filling", "choose_option": "✏️ choosing", "select_option": "✏️ choosing",
+    "fill_secret_field": "🔐 entering secret", "upload_file": "📎 attaching",
+    "click_element": "🖱️ clicking", "download_element": "⬇️ downloading",
+    "screenshot_page": "📸 screenshot", "scrape_page": "🗂️ extracting data",
+    "visual_inspect": "👁️ looking at the page", "visual_click": "👁️ clicking visually",
+    "web_agent": "🧭 starting a web mission:", "scan_inbox": "📬 reading your inbox",
+    "send_email": "✉️ sending email", "reply_email": "✉️ replying",
+    "create_draft": "📝 drafting email", "trash_email": "🗑️ trashing email",
+    "reddit_search": "🔎 searching Reddit", "reddit_feed": "🔎 browsing Reddit",
+    "youtube_search": "🔎 searching YouTube", "list_uploads": "📁 checking your files",
+    "read_profile": "👤 reading your profile", "remember_fact": "🧠 remembering that",
+    "write_file": "💾 writing", "read_file": "📖 reading", "list_dir": "📁 listing",
+    "create_folder": "📁 creating folder", "delete_file": "🗑️ deleting",
+    "move_file": "📦 moving", "open_app": "🚀 opening app", "take_screenshot": "📸 screenshot",
+    "pick_file": "📁 finding a file", "set_volume": "🔊 volume", "mute": "🔇 muting",
+    "set_brightness": "💡 brightness", "media_control": "⏯️ media", "lock_pc": "🔒 locking",
+    "power_action": "⏻ power action", "system_status": "🎛️ checking system",
+    "ask_user": "💬 asking you", "request_confirmation": "💬 asking your approval",
+    "request_secret": "🔐 asking you for a secret",
+    "list_tabs": "🗂️ checking tabs", "switch_tab": "🗂️ switching tab",
+    "new_tab": "🗂️ new tab", "close_tab": "🗂️ closing tab", "scroll_page": "↕️ scrolling",
+}
+
+
+def _friendly_step(s: str) -> str:
+    if s.startswith("web_agent step"):
+        return f"🧭 {s[10:].strip()}"
+    name, sep, rest = s.partition("(")
+    label = _FRIENDLY_STEPS.get(name.strip())
+    if label is None:
+        return s[:90]
+    hint = rest[:-1] if rest.endswith(")") else rest
+    hint = hint.strip().strip("{}")[:60]
+    return f"{label} {hint}".strip()
+
+
+def _render_status(task: TaskRecord, frame: int = 0) -> str:
+    spin = _SPIN[frame % len(_SPIN)]
+    lines = [f"{spin} On it — {state.redact_text(task.text)[:200]}"]
+    lines += [f"→ {_friendly_step(s)}" for s in task.steps[-6:]]
     return "\n".join(lines)
+
+
+async def _ticker(task: TaskRecord, card: dict) -> None:
+    """Animate the card while the task runs: spin the loader + native typing cue."""
+    try:
+        while task.status in ("queued", "running") and _app is not None:
+            await asyncio.sleep(2.5)
+            if task.status not in ("queued", "running") or card["msg_id"] is None:
+                break
+            card["spin"] = (card.get("spin", 0) + 1) % len(_SPIN)
+            if card["flusher"] is not None:  # a real step edit is already queued
+                continue
+            try:
+                await _app.bot.send_chat_action(chat_id=_allowed_chat_id, action="typing")
+                await _app.bot.edit_message_text(
+                    chat_id=_allowed_chat_id, message_id=card["msg_id"],
+                    text=_render_status(task, card["spin"]))
+                card["last"] = time.monotonic()
+            except Exception:
+                pass  # rate limit / not-modified: skip this beat
+    finally:
+        card["ticker"] = None
+
+
+async def _finish_status_card(task: TaskRecord) -> None:
+    """Stop the animation and stamp the card with the final verdict."""
+    card = _status_cards.pop(task.id, None)
+    if card is None:
+        return
+    for key in ("ticker", "flusher"):
+        t = card.get(key)
+        if t is not None:
+            t.cancel()
+    if card.get("msg_id") is not None and _app is not None:
+        icon = {"done": "✅", "failed": "❌", "cancelled": "🛑"}.get(task.status, "⚠️")
+        lines = [f"{icon} {state.redact_text(task.text)[:200]}"]
+        lines += [f"→ {_friendly_step(s)}" for s in task.steps[-4:]]
+        try:
+            await _app.bot.edit_message_text(
+                chat_id=_allowed_chat_id, message_id=card["msg_id"], text="\n".join(lines))
+        except Exception:
+            pass
 
 
 async def _flush_card(task: TaskRecord, card: dict) -> None:
@@ -236,14 +320,16 @@ async def update_status(task: TaskRecord, step: str) -> None:
     if _app is None or _allowed_chat_id == 0:
         return
     card = _status_cards.setdefault(
-        task.id, {"msg_id": None, "last": 0.0, "pending": None, "flusher": None})
-    text = _render_status(task)
+        task.id, {"msg_id": None, "last": 0.0, "pending": None, "flusher": None,
+                  "ticker": None, "spin": 0})
+    text = _render_status(task, card.get("spin", 0))
     if card["msg_id"] is None:
         try:
             msg = await _app.bot.send_message(chat_id=_allowed_chat_id, text=text)
             card["msg_id"] = msg.message_id
             task.status_msg_id = msg.message_id
             card["last"] = time.monotonic()
+            card["ticker"] = asyncio.create_task(_ticker(task, card))
         except Exception as e:
             state.log_event({"event": "send_failed", "task": task.id, "error": str(e)})
         return
@@ -864,7 +950,7 @@ async def _worker() -> None:
             continue
         state.current = task
         state.mark(task, "running")
-        await update_status(task, "starting")
+        await update_status(task, "thinking about the best way to do this…")
         run = asyncio.create_task(_run_agent(task))
         _current_run_task = run
         try:
@@ -888,6 +974,7 @@ async def _worker() -> None:
             _current_run_task = None
             state.current = None
             try:
+                await _finish_status_card(task)
                 await send_report(task, getattr(task, "screenshot", None))
             except Exception as e:
                 state.log_event({"event": "report_failed", "task": task.id,
