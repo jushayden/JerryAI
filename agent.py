@@ -30,7 +30,7 @@ Rules:
 - On large/dynamic pages, use find_elements to search controls omitted from a truncated digest and choose_option to select an exact semantic radio/checkbox choice. If the requested choice does not exist or is ambiguous, ask the user; never silently choose the closest label.
 - For web forms: browser_goto the page, use the field digest to fill_field/select_option each field from the profile (call read_profile first); for file/attachment fields use pick_file to locate the file then upload_file; click the submit button LAST (the system shows the user a full breakdown and asks them to approve it).
 - Keep going until the task is done or truly blocked; work step by step.
-- When finished, respond with a one-paragraph plain-text summary of what you did (no markdown, no tool calls)."""
+- When finished, reply the way a sharp, friendly personal assistant would text the user: plain, natural, concise. Lead with the answer. Short bullets only when listing things; otherwise a sentence or two. No markdown bold/headers, no preamble like "Here's a summary of...", no meta about steps or tools. Just the useful result."""
 
 
 async def _default_status(step: str):

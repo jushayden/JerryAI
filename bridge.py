@@ -258,18 +258,17 @@ async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> N
     The audit trail is written to disk but NOT pushed to the phone."""
     if _app is None or _allowed_chat_id == 0:
         return
-    lines = [f"[{task.status.upper()}] {state.redact_text(task.text)}"]
-    if task.result:
-        lines.append(f"Result: {task.result}")
-    if task.needs:
-        lines.append(f"Needs: {task.needs}")
-    meta = f"Steps: {len(task.steps)}"
-    if task.started is not None and task.finished is not None:
-        meta += f" | Duration: {task.finished - task.started:.0f}s"
-    lines.append(meta)
+    # Clean, human report: just the answer. Only tag when something needs attention —
+    # no "[DONE]" echo, no step/duration meta.
+    if task.status == "done":
+        lines = [task.result or "Done."]
+    else:
+        tag = {"failed": "⚠️ That didn't work",
+               "needs_attention": "⚠️ I need you",
+               "cancelled": "Stopped."}.get(task.status, task.status)
+        lines = [f"{tag} {task.needs or task.result or ''}".strip()]
     if task.sources:
-        lines.append("Sources:")
-        lines.extend(f"- {url}" for url in task.sources[:10])
+        lines.append("\nSources: " + " · ".join(task.sources[:5]))
     await _retry(_app.bot.send_message, chat_id=_allowed_chat_id,
                  text=state.redact_text("\n".join(lines))[:4000])
     if screenshot_path:
@@ -420,9 +419,10 @@ async def _on_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
         return
     task = state.new_task(
-        "Scan my email inbox from the last 24 hours using scan_inbox, then give me a short "
-        "briefing: summarize what's new and flag only what looks important (things needing a "
-        "reply, deadlines, money, real people writing directly). Skip routine newsletters/promos.",
+        "Scan my email inbox from the last 24 hours using scan_inbox, then text me a quick, "
+        "human briefing. Lead with anything that actually needs me (a reply, a deadline, money, "
+        "a real person writing directly, a security alert). Then one line on the rest. Keep it "
+        "short and natural — a few bullets max, no preamble, no markdown headers.",
         origin="telegram")
     await update.message.reply_text(f"On it — inbox briefing queued as task {task.id}.")
 
