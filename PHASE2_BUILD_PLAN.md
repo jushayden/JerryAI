@@ -142,4 +142,31 @@ Follow the existing tool-fn pattern exactly (never raise; digest via `_fresh_dig
 Also: in CDP mode, when a task arrives with "(The user is currently looking at this
 page: URL)" (the J badge appends this — see `server.py::_post_task`), the model should
 act on that tab. Implement `_page_for_url(url)`: exact-or-prefix match over
+`_context.pages`, and have `browser_goto` switch to a matching open tab instead of
+navigating a fresh one. Add one system-prompt line telling the model to act on the
+user's current tab.
+
+### P0.4 — JS-settle before extraction
+`_fresh_digest`/`read_page` call a `_settle(page)` helper: `wait_for_load_state("networkidle", 5s)` + ~800ms. Fixes the live bug where JS-heavy pages extracted before they painted.
+
+### P0.5 — Challenge hard-stop (safety boundary)
+`_challenge_on(page)` checks iframe URLs (recaptcha/hcaptcha/turnstile/arkose) and body text ("verify you are human", "unusual traffic", "access denied", …). When true, `_fresh_digest`/`read_page` return a fixed `CHALLENGE_MSG` telling the model to `ask_user` for the user to complete it manually. Never solved or bypassed. Mirrored in SYSTEM_PROMPT.
+
+### P0.6 — Never-guess file picker + user-info capture
+`tools_fs.pick_file(hint)` returns one path only when unambiguous, else a numbered list for the model to `ask_user` about; feeds `upload_file`. `tools_fs.remember_fact(key,value)` + `/remember key: value` write `profile_extra.yaml` (gitignored), merged by `read_profile` — so info the user volunteers over Telegram is reused, not re-asked.
+
+---
+
+## BUILD STATUS (this session)
+**Track A (all P0 items above) is IMPLEMENTED** in `tools_browser.py`, `tools_fs.py`,
+`agent.py`, `gate.py`, `config.py`, plus `edge_codrive.bat`. Verified: fs/state/browser
+regression suites green (25/25 on the mock form via the owned-Chromium fallback); CDP
+attach + live co-drive still need a run with `edge_codrive.bat` started and the real phone.
+**Track B (Gmail)** is wired (`/inbox`, registry merge) and waits only on the user's
+`credentials.json`. **Tracks B-Outlook and C (Social/News)** are teammate work — see the
+"Team work split" section of `README.md` for the ready-to-grab specs and the integration
+contract every track follows. This doc is the archival design rationale; README is the
+current source of truth for who-builds-what.
+
+(Original archived reference `_context.pages` note above is superseded by the shipped code.)
 `_context.pages`; add one system-prompt line telling the model t

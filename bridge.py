@@ -284,6 +284,37 @@ async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("Stopped.")
 
 
+async def _on_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    task = state.new_task(
+        "Scan my email inbox from the last 24 hours using scan_inbox, then give me a short "
+        "briefing: summarize what's new and flag only what looks important (things needing a "
+        "reply, deadlines, money, real people writing directly). Skip routine newsletters/promos.")
+    await update.message.reply_text(f"On it — inbox briefing queued as task {task.id}.")
+
+
+async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    raw = (update.message.text or "").partition(" ")[2].strip()
+    if ":" not in raw:
+        await update.message.reply_text("Usage: /remember key: value  (e.g. /remember work authorization: US citizen)")
+        return
+    key, _, value = raw.partition(":")
+    key, value = key.strip(), value.strip()
+    if not key or not value:
+        await update.message.reply_text("Usage: /remember key: value")
+        return
+    try:
+        with open(config.PROFILE_EXTRA_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{key}: {value}\n")
+        state.log_event({"event": "remember", "key": key})
+        await update.message.reply_text(f"Got it — I'll remember {key} = {value}.")
+    except Exception as e:
+        await update.message.reply_text(f"Couldn't save that: {e}")
+
+
 async def _on_testconfirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
         return
@@ -369,6 +400,8 @@ async def start_bridge() -> None:
     app.add_handler(CommandHandler("brief", _on_brief))
     app.add_handler(CommandHandler("status", _on_status))
     app.add_handler(CommandHandler("cancel", _on_cancel))
+    app.add_handler(CommandHandler("inbox", _on_inbox))
+    app.add_handler(CommandHandler("remember", _on_remember))
     app.add_handler(CommandHandler("testconfirm", _on_testconfirm))
     app.add_handler(CallbackQueryHandler(_on_callback, pattern=r"^cfm:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text))

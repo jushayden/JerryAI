@@ -10,7 +10,7 @@ SUBMIT_WORDS = re.compile(
     re.I,
 )
 
-_MAX_FIELD_LINES = 13  # header (2 lines) + 13 fields ≈ 15-line cap
+_MAX_FIELD_LINES = 40  # job applications can be long; show the user everything being submitted
 
 
 def is_irreversible_click(el: dict) -> bool:

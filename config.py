@@ -56,8 +56,13 @@ BROWSER_PROFILE_DIR = PROJECT_ROOT / "browser_profile"
 
 # --- Data files ---
 PROFILE_PATH = PROJECT_ROOT / "profile.yaml"
+PROFILE_EXTRA_PATH = PROJECT_ROOT / "profile_extra.yaml"  # facts the user gives via Telegram
 EVENTS_LOG = PROJECT_ROOT / "events.jsonl"
 SCREENSHOT_DIR = PROJECT_ROOT / "screenshots"
+
+# --- Co-drive: attach to the user's real Edge via CDP when available ---
+CDP_PORT = 9222
+CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 
 # --- Mock form server ---
 MOCK_FORM_PORT = 8000

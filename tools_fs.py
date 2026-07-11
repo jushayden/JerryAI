@@ -134,12 +134,88 @@ async def open_app(args: dict) -> str:
 async def read_profile(args: dict) -> str:
     try:
         if config.PROFILE_PATH.exists():
-            return config.PROFILE_PATH.read_text(encoding="utf-8")
-        example = config.PROJECT_ROOT / "profile.example.yaml"
-        return (
-            "(demo persona — profile.yaml not filled in yet)\n"
-            + example.read_text(encoding="utf-8")
-        )
+            base = config.PROFILE_PATH.read_text(encoding="utf-8")
+        else:
+            example = config.PROJECT_ROOT / "profile.example.yaml"
+            base = ("(demo persona — profile.yaml not filled in yet)\n"
+                    + example.read_text(encoding="utf-8"))
+        # Merge in facts the user has volunteered via Telegram (/remember).
+        if config.PROFILE_EXTRA_PATH.exists():
+            extra = config.PROFILE_EXTRA_PATH.read_text(encoding="utf-8").strip()
+            if extra:
+                base += "\n# --- facts you told me later ---\n" + extra
+        return base
+    except Exception as e:
+        return f"Error: {e}"
+
+
+async def remember_fact(args: dict) -> str:
+    """Persist a fact the user volunteered so the agent can reuse it (digital twin)."""
+    try:
+        key = str(args.get("key", "")).strip()
+        value = str(args.get("value", "")).strip()
+        if not key or not value:
+            return "Error: remember_fact needs both 'key' and 'value'."
+        line = f"{key}: {value}\n"
+        with open(config.PROFILE_EXTRA_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+        return f"Remembered: {key} = {value}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+_PICK_EXT = {
+    "resume": {".pdf", ".doc", ".docx"},
+    "cv": {".pdf", ".doc", ".docx"},
+    "photo": {".jpg", ".jpeg", ".png", ".heic"},
+    "headshot": {".jpg", ".jpeg", ".png"},
+    "image": {".jpg", ".jpeg", ".png", ".gif", ".webp"},
+    "portfolio": {".pdf", ".png", ".jpg", ".jpeg"},
+}
+
+
+async def pick_file(args: dict) -> str:
+    """Find the local file to attach. Never guesses among several — returns a numbered
+    list for the model to ask the user about. Feeds upload_file."""
+    try:
+        hint = str(args.get("hint", "")).strip().lower()
+        # 1) explicit profile hints (resume_path etc.) win.
+        if config.PROFILE_PATH.exists():
+            import yaml
+            try:
+                prof = yaml.safe_load(config.PROFILE_PATH.read_text(encoding="utf-8")) or {}
+            except Exception:
+                prof = {}
+            for key in ("resume_path", f"{hint}_path"):
+                val = prof.get(key)
+                if val and Path(os.path.expandvars(str(val))).expanduser().is_file():
+                    p = Path(os.path.expandvars(str(val))).expanduser()
+                    return f"Use this file: {p}"
+        # 2) scan the usual folders for matching extensions.
+        exts = set()
+        for k, v in _PICK_EXT.items():
+            if k in hint:
+                exts |= v
+        if not exts:
+            exts = _PICK_EXT["resume"] | _PICK_EXT["image"]
+        home = config.SANDBOX_ROOT
+        roots = [home / "Documents", home / "Desktop", home / "Downloads",
+                 home / "OneDrive" / "Desktop", home / "OneDrive" / "Documents"]
+        found = []
+        for r in roots:
+            if r.is_dir():
+                for f in r.iterdir():
+                    if f.is_file() and f.suffix.lower() in exts:
+                        found.append(f)
+        found = sorted(set(found), key=lambda p: p.stat().st_mtime, reverse=True)[:10]
+        if not found:
+            return (f"No matching files found for '{hint}'. Ask the user for the full path "
+                    f"to the file they want to attach.")
+        if len(found) == 1:
+            return f"Use this file: {found[0]}"
+        listing = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(found))
+        return ("Multiple candidate files — DO NOT guess. Ask the user which one to use "
+                f"(use ask_user), then upload_file with its full path:\n{listing}")
     except Exception as e:
         return f"Error: {e}"
 
@@ -255,5 +331,28 @@ TOOLS: dict[str, dict] = {
             [],
         ),
         "fn": take_screenshot,
+    },
+    "remember_fact": {
+        "schema": _schema(
+            "remember_fact",
+            "Save a fact the user told you (e.g. a phone number, an answer to a form "
+            "question) so you can reuse it later without asking again.",
+            {
+                "key": {"type": "string", "description": "Short label, e.g. 'work_authorization'"},
+                "value": {"type": "string", "description": "The value to remember"},
+            },
+            ["key", "value"],
+        ),
+        "fn": remember_fact,
+    },
+    "pick_file": {
+        "schema": _schema(
+            "pick_file",
+            "Find a local file to attach (resume, photo, etc.). Returns the path if it's "
+            "unambiguous, or a numbered list to ask the user about. Never picks blindly.",
+            {"hint": {"type": "string", "description": "What kind of file, e.g. 'resume' or 'headshot'"}},
+            ["hint"],
+        ),
+        "fn": pick_file,
     },
 }

@@ -6,6 +6,7 @@ Irreversible clicks (per gate.is_irreversible_click) go through an async
 confirm callback injected via configure().
 """
 import time
+import urllib.request
 
 from playwright.async_api import async_playwright, TimeoutError as PWTimeoutError
 
@@ -18,6 +19,16 @@ _context = None
 _page = None
 _last: dict[str, dict] = {}   # data-agent-id -> element info from last extraction
 _preauth = False
+_cdp = False   # True when attached to the user's real Edge over CDP (co-drive)
+
+
+def _cdp_available() -> bool:
+    """Is the user's real Edge listening on the debug port? (co-drive launcher started it)"""
+    try:
+        with urllib.request.urlopen(config.CDP_URL + "/json/version", timeout=0.7) as r:
+            return r.status == 200
+    except Exception:
+        return False
 
 DENIED_MSG = (
     "User DENIED this action (or it timed out). Do not retry it. "
@@ -41,31 +52,46 @@ def configure(confirm=None, preauth=False):
 
 
 async def _ctx():
-    """Lazy singleton: start playwright + persistent Chromium context, reuse one Page."""
-    global _pw, _context, _page
+    """Lazy singleton page. Prefer co-drive (attach to the user's real Edge over CDP);
+    otherwise fall back to our own persistent Chromium (also the demo backup)."""
+    global _pw, _context, _page, _cdp
     if _page is not None and not _page.is_closed():
         return _page
     if _context is None:
         _pw = await async_playwright().start()
-        _context = await _pw.chromium.launch_persistent_context(
-            user_data_dir=str(config.BROWSER_PROFILE_DIR),
-            headless=False,
-            args=[
-                "--start-maximized",
-                "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication",
-            ],
-            ignore_default_args=["--enable-automation"],
-            no_viewport=True,
-        )
-    _page = _context.pages[0] if _context.pages else await _context.new_page()
+        if _cdp_available():
+            # Co-drive: adopt the user's real Edge session. Never spoof, never bypass.
+            browser = await _pw.chromium.connect_over_cdp(config.CDP_URL)
+            _context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            _cdp = True
+        else:
+            _context = await _pw.chromium.launch_persistent_context(
+                user_data_dir=str(config.BROWSER_PROFILE_DIR),
+                headless=False,
+                args=[
+                    "--start-maximized",
+                    "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication",
+                ],
+                ignore_default_args=["--enable-automation"],
+                no_viewport=True,
+            )
+            _cdp = False
+    # Prefer the most recently active real tab in co-drive mode.
+    if _context.pages:
+        _page = _context.pages[-1]
+    else:
+        _page = await _context.new_page()
     return _page
 
 
 async def shutdown():
-    """Close browser and playwright cleanly."""
-    global _pw, _context, _page
+    """Disconnect (CDP: never close the user's Edge) or close our own browser."""
+    global _pw, _context, _page, _cdp
     try:
-        if _context is not None:
+        if _cdp and _context is not None:
+            # connect_over_cdp: close the browser *connection*, leaving Edge running.
+            await _context.browser.close()
+        elif _context is not None:
             await _context.close()
     except Exception:
         pass
@@ -75,6 +101,7 @@ async def shutdown():
     except Exception:
         pass
     _pw = _context = _page = None
+    _cdp = False
     _last.clear()
 
 
@@ -221,7 +248,53 @@ def _digest(elements, page_title, url) -> str:
     return "\n".join(lines)
 
 
+async def _settle(page):
+    """Let JS-heavy pages finish rendering before we read them (live-observed bug:
+    the Tesla configurator extracted before it painted). Best-effort, never raises."""
+    try:
+        await page.wait_for_load_state("networkidle", timeout=5000)
+    except Exception:
+        pass
+    try:
+        await page.wait_for_timeout(800)
+    except Exception:
+        pass
+
+
+# Markers of a CAPTCHA / human-verification / bot wall. Boundary: the agent must
+# STOP and hand back to the user — never attempt to solve or automate around these.
+_CHALLENGE_IFRAME = ("recaptcha", "hcaptcha", "turnstile", "arkoselabs", "funcaptcha", "geo.captcha")
+_CHALLENGE_TEXT = (
+    "verify you are human", "verify you're human", "are you a robot", "i'm not a robot",
+    "unusual traffic", "access denied", "checking your browser", "complete the captcha",
+    "press and hold", "confirm you are human", "enable javascript and cookies",
+)
+CHALLENGE_MSG = (
+    "STOP: this page is showing a CAPTCHA or human-verification/bot check. "
+    "Per policy the agent must NOT solve or bypass it. Call ask_user to tell the user "
+    "to complete the verification themselves in their browser, then say 'continue' — and wait."
+)
+
+
+async def _challenge_on(page) -> bool:
+    """True if the current page is a CAPTCHA / verification / bot wall."""
+    try:
+        for f in page.frames:
+            u = (f.url or "").lower()
+            if any(m in u for m in _CHALLENGE_IFRAME):
+                return True
+        body = (await page.evaluate("() => document.body ? document.body.innerText : ''") or "").lower()
+        head = body[:1500]
+        return any(t in head for t in _CHALLENGE_TEXT)
+    except Exception:
+        return False
+
+
 async def _fresh_digest() -> str:
+    page = await _ctx()
+    await _settle(page)
+    if await _challenge_on(page):
+        return CHALLENGE_MSG
     elements, title, url = await _extract()
     return _digest(elements, title, url)
 
@@ -263,6 +336,13 @@ async def browser_goto(args: dict) -> str:
     if not url:
         return "Error: missing url"
     try:
+        await _ctx()
+        # Co-drive: if the user already has this page open, act on THAT tab rather
+        # than navigating a different one out from under them.
+        existing = await _page_for_url(url)
+        if existing is not None:
+            await _select_page(existing)
+            return await _fresh_digest()
         page = await _ctx()
         await page.goto(url, wait_until="load", timeout=20000)
         return await _fresh_digest()
@@ -273,6 +353,9 @@ async def browser_goto(args: dict) -> str:
 async def read_page(args: dict) -> str:
     try:
         page = await _ctx()
+        await _settle(page)
+        if await _challenge_on(page):
+            return CHALLENGE_MSG
         title = await page.title()
         body = await page.evaluate("() => document.body ? document.body.innerText : ''")
         text = f"{title}\n{body.strip()}"
@@ -382,6 +465,81 @@ async def screenshot_page(args: dict) -> str:
         return f"screenshot saved: {path}"
     except Exception as e:
         return f"Error: screenshot failed: {e}"
+
+
+# --- tabs (mainly for co-drive: act on the tab the user is looking at) ---
+async def _select_page(page):
+    """Make `page` the active target and bring it to front."""
+    global _page
+    _page = page
+    try:
+        await page.bring_to_front()
+    except Exception:
+        pass
+    return page
+
+
+async def _page_for_url(url: str):
+    """Find an open tab whose URL matches (exact, then prefix). None if no match."""
+    await _ctx()
+    if not url or _context is None:
+        return None
+    u = url.rstrip("/")
+    for p in _context.pages:
+        if (p.url or "").rstrip("/") == u:
+            return p
+    for p in _context.pages:
+        if (p.url or "").startswith(url[:60]):
+            return p
+    return None
+
+
+async def list_tabs(args: dict) -> str:
+    try:
+        await _ctx()
+        pages = _context.pages if _context else []
+        if not pages:
+            return "No open tabs."
+        lines = []
+        for i, p in enumerate(pages):
+            try:
+                title = (await p.title())[:60]
+            except Exception:
+                title = ""
+            mark = " <- current" if p is _page else ""
+            lines.append(f"[{i}] {title} — {p.url}{mark}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: could not list tabs: {e}"
+
+
+async def switch_tab(args: dict) -> str:
+    try:
+        await _ctx()
+        pages = _context.pages if _context else []
+        idx = int(args.get("index", -1))
+        if not (0 <= idx < len(pages)):
+            return f"Error: tab index {idx} out of range (0..{len(pages) - 1}). Call list_tabs."
+        await _select_page(pages[idx])
+        return f"Switched to tab {idx}.\n" + await _fresh_digest()
+    except Exception as e:
+        return f"Error: could not switch tab: {e}"
+
+
+async def new_tab(args: dict) -> str:
+    try:
+        await _ctx()
+        url = str(args.get("url") or "").strip()
+        page = await _context.new_page()
+        await _select_page(page)
+        if url:
+            try:
+                await page.goto(url, wait_until="load", timeout=20000)
+            except Exception as e:
+                return f"Opened a new tab but could not load {url}: {e}"
+        return f"Opened new tab.\n" + await _fresh_digest()
+    except Exception as e:
+        return f"Error: could not open new tab: {e}"
 
 
 # --- tool registry ---
@@ -506,5 +664,50 @@ TOOLS = {
             },
         },
         "fn": screenshot_page,
+    },
+    "list_tabs": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "list_tabs",
+                "description": "List the open browser tabs (index, title, url). Use to find the tab the user is looking at.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        "fn": list_tabs,
+    },
+    "switch_tab": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "switch_tab",
+                "description": "Switch to an open tab by its index (from list_tabs) and read it.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer", "description": "Tab index from list_tabs, e.g. 0"}
+                    },
+                    "required": ["index"],
+                },
+            },
+        },
+        "fn": switch_tab,
+    },
+    "new_tab": {
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "new_tab",
+                "description": "Open a new browser tab, optionally navigating to a URL, and read it.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Optional URL to open in the new tab"}
+                    },
+                    "required": [],
+                },
+            },
+        },
+        "fn": new_tab,
     },
 }
