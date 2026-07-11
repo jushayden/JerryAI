@@ -889,14 +889,51 @@ async def reload_page(args: dict) -> str:
         return f"Error: could not reload: {e}"
 
 
+_SCROLL_JS = """(amt) => {
+  const cands = [document.scrollingElement,
+    ...Array.from(document.querySelectorAll('div,main,section,aside,ul'))
+      .filter(el => el.clientHeight > 150 && el.scrollHeight > el.clientHeight + 20 &&
+                    /(auto|scroll)/.test(getComputedStyle(el).overflowY))]
+    .filter(Boolean)
+    .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
+  for (const el of cands) {
+    const before = el.scrollTop;
+    el.scrollTop = before + amt;
+    if (Math.abs(el.scrollTop - before) > 1)
+      return {moved: Math.round(el.scrollTop - before),
+              what: el === document.scrollingElement ? 'page'
+                    : (el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0]).slice(0, 40)};
+  }
+  return null;
+}"""
+
+
 async def scroll_page(args: dict) -> str:
+    """Scroll the window — or, on app-style pages where the window is fixed (e.g. car
+    configurators), the largest inner scrollable panel. Verifies something MOVED and
+    says so, instead of reporting success while the screen sits still."""
     try:
         page = await _ctx()
         amount = max(-4000, min(4000, int(args.get("amount", 700))))
-        await page.mouse.wheel(0, amount)
+        res = None
+        try:
+            res = await page.evaluate(_SCROLL_JS, amount)
+        except Exception:
+            pass
+        if res is None:  # nothing obviously scrollable: wheel at the viewport centre
+            vp = await page.evaluate("() => ({w: innerWidth, h: innerHeight})")
+            await page.mouse.move(vp["w"] / 2, vp["h"] / 2)
+            await page.mouse.wheel(0, amount)
+            note = ("(note: no scrollable area was detected — the wheel was tried at the "
+                    "page centre; if content did not change, this page may not scroll and "
+                    "you should use visual_inspect or click a section link instead)")
+            _audit("scroll", {"amount": amount, "target": "wheel-fallback"}, ok=True)
+        else:
+            note = f"(scrolled {res['what']} by {res['moved']}px)"
+            _audit("scroll", {"amount": amount, "target": res["what"],
+                              "moved": res["moved"]}, ok=True)
         await page.wait_for_timeout(250)
-        _audit("scroll", {"amount": amount}, ok=True)
-        return await _fresh_digest()
+        return f"{note}\n" + await _fresh_digest()
     except Exception as e:
         return f"Error: could not scroll: {e}"
 
