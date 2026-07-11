@@ -19,15 +19,14 @@ phone (Telegram, any network) ⇄ Telegram servers ⇄ long polling ⇄ bridge.p
                                                   ├─ tools_browser.py  Playwright — co-drive your real Edge
                                                   ├─ tools_email.py    Gmail read-only (scan_inbox)
                                                   ├─ gate.py           deterministic approval gate
-                                                  └─ state.py          briefs + events.jsonl audit log
+                                                  └─ state.py          task origins, sources, artifacts + audits
 ```
 
-**Safety model:** filling/drafting is autonomous; **irreversible actions are gated.** Any
-click that would submit/send/buy/delete triggers an approval card on your phone (Approve/
-Deny) — enforced by rules in code, not the model's judgment. The agent works only in a
-browser session **you** drive; it never bypasses CAPTCHAs, bot checks, paywalls, logins, or
-ToS, and never spoofs its traffic — if a site blocks a real logged-in session, it stops and
-tells you. Prefix a task with `!` to pre-authorize (gate logs but doesn't block).
+**Safety model:** filling, research, scraping, and drafting are autonomous; **high-impact
+actions are always gated.** Submitting, sending/posting, buying/booking/paying, deleting,
+and account changes trigger an exact approval card on your phone. CAPTCHA, bot checks, and
+paywalls are never bypassed. Passwords and OTPs can be requested through Telegram as
+one-use in-memory handles; raw values never enter the model, audit, or status messages.
 
 ---
 
@@ -62,23 +61,23 @@ choose, and gates every submit. Files: `tools_browser.py`, `tools_fs.py`, `agent
   MSAL device-code auth), same `scan_inbox`-shaped tool + `OUTLOOK_SETUP.md`, folded into
   `/inbox`. Heads-up: the Azure app registration is the time risk — start it early.
 
-### Track C — Social + news briefing (read-only)  (⛏ teammate)
+### Track C — Social + news briefing  (browser tools built)
 - **News**: a `/news` command — no new tool, just a canned task using the existing browser
   tools (DuckDuckGo HTML → read top sources) over an `interests:` list in your profile.
 - **Social reading**: co-drive only — you open your X/IG/TikTok/FB feed in Edge, hit the J
   badge with "summarize what's new", the agent reads the rendered page. Stops if a platform
   blocks it.
-- **Posting is OUT OF SCOPE, all platforms** (researched Jul 2026): X has no free tier
-  (pay-per-use credits only); Instagram/Facebook need 2–4-week app review; TikTok unaudited
-  forces posts to private. If a real posting API becomes reachable, it must use a fresh
-  per-post confirmation showing platform, exact text, media, tags, and visibility.
+- **Posting through the visible Edge UI** is high-impact and always requires a fresh
+  Telegram approval showing the destination and exact content. Jerry never bypasses
+  platform controls.
 
 ---
 
 ## Setup (once)
 
 1. Install [Ollama](https://ollama.com/download) (latest — RTX 50-series needs recent builds):
-   `ollama pull qwen3-coder:30b` (primary; fallbacks `gpt-oss:20b`, `qwen3:14b`).
+   `ollama pull qwen3-coder:30b` and `ollama pull qwen3-vl:30b-a3b-instruct`
+   (higher-accuracy local visual perception; the models are swapped in memory).
 2. `pip install -r requirements.txt` and `python -m playwright install chromium`.
 3. Telegram: **@BotFather** → `/newbot` → `copy .env.example .env`, paste `BOT_TOKEN=`.
 4. `copy profile.example.yaml profile.yaml`, fill in your info (gitignored). Add
@@ -97,7 +96,6 @@ On your phone: `/start` once (registers you as owner), then just text tasks.
 - `/inbox` — email briefing (needs Gmail OAuth)
 - `/remember key: value` — teach the agent a fact to reuse (e.g. `/remember work authorization: US citizen`)
 - `/brief` · `/status` · `/cancel` · `/testconfirm`
-- `!task text` — pre-authorized (skips approval gates)
 
 ## Talk to it (voice messages)
 
@@ -114,11 +112,13 @@ agent's questions too — just reply with your voice.
 
 ## Co-drive your real browser (the app-filler demo)
 
-For real sites (job applications, signups) the agent works **inside your own Edge session**
-so your logins apply and nothing is spoofed:
+For real sites, the agent works inside a persistent **Jerry Edge profile**. Modern Edge
+rejects remote debugging on the default profile, so sign into required sites once in this
+dedicated profile; its cookies, logins, and tabs persist between sessions:
 
-1. Double-click **`edge_codrive.bat`** — it reopens Edge with a debug port (your tabs are
-   restored). Do this once per session.
+1. Optionally double-click **`edge_codrive.bat`** to enable co-drive ahead of time. If Edge
+   is closed, Jerry starts it automatically. If it is already open without co-drive, Jerry
+   asks on Telegram before closing and restoring it.
 2. Navigate to the page yourself (e.g. a Greenhouse/Lever job posting) and stay there.
 3. From the phone or the **J badge** (load once: `edge://extensions` → Developer mode →
    Load unpacked → `edge_extension/`): "fill this application using my profile."
@@ -127,8 +127,15 @@ so your logins apply and nothing is spoofed:
 5. Hit a CAPTCHA? It **stops and asks you** to complete it, then continues. It will not
    solve or bypass one — a paused task is correct.
 
-If you skip the launcher, the agent falls back to its own Chromium (fine for the mock form
-and cooperative sites; weaker on bot-shielded ones).
+Production tasks never silently fall back to a separate browser profile. Set
+`BROWSER_MODE=owned` only for development and automated browser tests.
+
+## Remote browser work from Telegram
+
+With `python main.py` running and the PC awake, send a research, itinerary, scraping, or
+form task directly to Telegram. Jerry opens task-owned Edge tabs, edits one live status
+card, asks for missing information or high-impact approvals, and finishes with a sourced
+summary, screenshot, generated data/download artifacts, and a timestamped audit file.
 
 ## Demo script (~6 min)
 
@@ -149,12 +156,19 @@ and cooperative sites; weaker on bot-shielded ones).
 - [ ] `edge_codrive.bat` run + one real co-drive form fill incl. resume upload
 - [ ] Rehearse `/cancel` mid-task; know your hotspot fallback if venue wifi blocks Telegram
 - [ ] Gmail OAuth done + `/inbox` returns a real summary
-- [ ] Honest limits to say first: no social posting (platform review/cost); closed
-      shadow-DOM forms invisible; the gate is rules-first, not airtight; the agent stops at
+- [ ] Honest limits to say first: closed shadow-DOM controls may be inaccessible; visual
+      fallback is best-effort; the gate is rules-first; the agent stops at
       CAPTCHAs by design (it won't solve them).
 
 ## Tests
 
-`python test_state.py` · `python test_tools_fs.py` · `python test_voice.py` · `python test_browser.py`
+`python test_state.py` · `python test_tools_fs.py` · `python test_voice.py` ·
+`python test_remote_operator.py` · `python test_vision.py` · `python test_browser.py`
 (voice test is offline — stubs Whisper, no model/network; browser test opens a visible
 Chromium window and drives the mock form end to end)
+
+After pulling the vision model, run `python test_vision.py --real` for the local-model smoke test.
+Run `python test_live_vlm.py` for the 30B VLM check against a complex live Microsoft page.
+For the selected real application test, complete any human verification in co-drive Edge,
+then run `python test_real_site.py --co-drive`; it fills and clears synthetic values on
+`https://job-boards.greenhouse.io/claudecorps/jobs/4250200009` and never submits.
