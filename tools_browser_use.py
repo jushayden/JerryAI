@@ -366,6 +366,23 @@ def _allowed_upload_paths() -> list[str]:
     return paths
 
 
+async def _activate_tab(session, url: str) -> None:
+    """Bring the sub-agent's working tab to the foreground so the user can WATCH it
+    drive (CDP acts on background tabs invisibly otherwise). Best-effort, never raises."""
+    if not url or url.startswith("edge://"):
+        return
+    try:
+        import urllib.request
+        for t in await session.get_tabs():
+            if getattr(t, "url", "") == url:
+                await asyncio.to_thread(
+                    urllib.request.urlopen,
+                    f"{config.CDP_URL}/json/activate/{t.target_id}", None, 3)
+                break
+    except Exception:
+        pass
+
+
 async def _close_owned_tabs(session, tabs_before) -> None:
     """Close only the tabs this run opened — never the user's own tabs."""
     if tabs_before is None:
@@ -420,6 +437,11 @@ async def web_agent(args: dict) -> str:
     if url:
         task_text += f"\nWork on this page (already opened for you in a new tab): {url}"
         initial_actions = [{"navigate": {"url": url, "new_tab": True}}]
+    upload_paths = _allowed_upload_paths()
+    if upload_paths:
+        listing = "\n".join(f"- {p}" for p in upload_paths[:12])
+        task_text += ("\nFiles you may attach with upload_file (use the EXACT path; "
+                      f"no other files are permitted):\n{listing}")
     try:
         if config.BROWSER_MODE == "edge":
             # Raises if Edge lacks the CDP port and the owner denies the relaunch;
@@ -441,6 +463,7 @@ async def web_agent(args: dict) -> str:
                 cur = await agent_obj.browser_session.get_current_page_url()
                 _remember_source(cur)
                 _audit("step", {"n": n, "url": cur})
+                await _activate_tab(agent_obj.browser_session, cur)
                 if _status_cb is not None:
                     await _status_cb(f"web_agent step {n}: {cur[:80]}")
             except Exception:
@@ -463,7 +486,7 @@ async def web_agent(args: dict) -> str:
             step_timeout=config.BROWSER_USE_STEP_TIMEOUT,
             extend_system_message=_EXTEND_SYSTEM,
             generate_gif=False,
-            available_file_paths=_allowed_upload_paths(),
+            available_file_paths=upload_paths,
             initial_actions=initial_actions,  # mission opens in its OWN new tab
         )
         history = await agent.run(max_steps=config.BROWSER_USE_MAX_STEPS,

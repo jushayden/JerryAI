@@ -13,3 +13,4 @@ __pycache__/
 .code-review-graph/
 .claude/settings.local.json
 client_secret_*.json
+jerry_run.log
