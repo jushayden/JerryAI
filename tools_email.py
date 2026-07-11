@@ -1,10 +1,9 @@
-"""Gmail tools for Pocket Agent: read the inbox, send/reply/draft, and tidy up
-(mark read, archive, trash). One-time OAuth setup: see GMAIL_SETUP.md.
+"""Gmail tools for Pocket Agent: read the inbox, send/reply/draft, and trash.
+One-time OAuth setup: see GMAIL_SETUP.md.
 
 Safety: sending, replying, and trashing are IRREVERSIBLE-ish, so they route through
 the same phone-approval flow as file deletion — the tool calls confirm_cb (set via
-configure()) and only proceeds on Approve, unless the task was `!`-preauthorized.
-Drafting, marking read, and archiving are reversible and run without a gate.
+configure()) and only proceeds on Approve. Drafting is reversible and runs without a gate.
 """
 import asyncio
 import base64
