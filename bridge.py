@@ -254,7 +254,8 @@ async def update_status(task: TaskRecord, step: str) -> None:
 
 # --- final report ---
 async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> None:
-    """Send final result, evidence, generated artifacts, and a detailed audit."""
+    """Send final result, evidence, and any generated artifacts (downloads).
+    The audit trail is written to disk but NOT pushed to the phone."""
     if _app is None or _allowed_chat_id == 0:
         return
     lines = [f"[{task.status.upper()}] {state.redact_text(task.text)}"]
@@ -282,9 +283,8 @@ async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> N
         except OSError as e:
             state.log_event({"event": "screenshot_failed", "error": str(e)})
 
-    audit_path = state.write_audit(task)
+    state.write_audit(task)  # kept as a local record; not sent to the phone
     files = [p for p in task.artifacts if p != screenshot_path]
-    files.append(str(audit_path))
     sent_paths: set[str] = set()
     for raw in files:
         if raw in sent_paths:
