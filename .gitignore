@@ -6,6 +6,7 @@ profile_extra.yaml
 events.jsonl
 browser_profile/
 screenshots/
+artifacts/
 __pycache__/
 *.pyc
 .code-review-graph/

@@ -16,8 +16,8 @@ cd JerryAI
 - Python 3.11+
 - [Ollama](https://ollama.com/download) — local model runtime, no API keys/cloud calls
 - A Telegram account (to create a bot via @BotFather)
-- Windows, macOS, or Linux — paths in code assume Windows-style but the stack is
-  cross-platform; ask in the group chat if you hit a path issue on Mac/Linux
+- Windows 11 for real-Edge co-drive. File/email tools may work elsewhere, but automatic
+  Edge launch and relaunch use Windows process controls.
 
 ## 3. Install
 
@@ -62,11 +62,16 @@ On your phone: message your bot, `/start` once, then just send it tasks. See REA
 python test_state.py
 python test_tools_fs.py
 python test_tools_email.py   # offline — stubs the Gmail API, no account needed
-python test_browser.py       # opens a visible Chromium window
+python test_remote_operator.py
+python test_vision.py
+python test_browser.py   # opens a visible Chromium window
 ```
 
-Run these before opening a PR if you touched `state.py`, `tools_fs.py`, `tools_email.py`,
-or `tools_browser.py`.
+Manual network/model checks: `python test_live_vlm.py` and, after completing any site
+verification in co-drive Edge, `python test_real_site.py --co-drive`.
+
+Run these before opening a PR if you touched task state, Telegram, safety gates, browser
+tools, or `tools_email.py`.
 
 ## 7. Code conventions (keep it lean — hackathon project)
 

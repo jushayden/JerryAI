@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Jerry Browser Tools Fixture</title></head>
+<body style="min-height:1800px;font-family:sans-serif">
+  <h1>Browser tools fixture</h1>
+  <form onsubmit="event.preventDefault(); document.getElementById('verified').textContent='Verified';">
+    <input id="otp" aria-label="One-time code" autocomplete="one-time-code">
+    <button id="verify" type="submit">Verify</button>
+  </form>
+  <span id="verified"></span>
+  <button id="dialog" type="button" onclick="confirm('Continue fixture?')">Open dialog</button>
+  <button id="pay" type="button">Pay now</button>
+  <input class="sr-only" id="complex-red" name="complex-color" value="red"
+         type="radio" aria-label="Complex Red">
+  <label for="complex-red">Complex Red</label>
+  <a id="download" download="fixture.txt" href="data:text/plain,Jerry%20download%20fixture">Download fixture</a>
+  <table id="results">
+    <thead><tr><th>City</th><th>Day</th><th>Activity</th></tr></thead>
+    <tbody>
+      <tr><td>Boston</td><td>Monday</td><td>Museum</td></tr>
+      <tr><td>Boston</td><td>Tuesday</td><td>Harbor walk</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:1400px">Bottom marker</p>
+  <style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
+</body>
+</html>

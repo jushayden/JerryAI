@@ -69,31 +69,24 @@ async def main():
     print("PASS missing-arg validation (nothing sent)")
 
     # --- send_email: DENIED leaves it unsent ---
-    tools_email.configure(confirm=deny, preauth=False)
+    tools_email.configure(confirm=deny)
     r = await tools_email.send_email({"to": "bob@x.com", "subject": "Hi", "body": "yo"})
     assert r.startswith("User DENIED"), r
     assert "send" not in calls, "send fired despite denial"
     print("PASS send_email denied -> not sent")
 
     # --- send_email: APPROVED goes through ---
-    tools_email.configure(confirm=allow, preauth=False)
+    tools_email.configure(confirm=allow)
     r = await tools_email.send_email({"to": "bob@x.com", "subject": "Hi", "body": "yo"})
     assert r == "SENT" and calls["send"] == ("bob@x.com", "Hi", "yo"), (r, calls.get("send"))
     print("PASS send_email approved -> sent")
 
-    # --- send_email: preauthorized skips the gate ---
-    calls.clear()
-    tools_email.configure(confirm=boom, preauth=True)
-    r = await tools_email.send_email({"to": "c@x.com", "subject": "P", "body": "z"})
-    assert r == "SENT" and "send" in calls, r
-    print("PASS send_email preauthorized -> no confirm")
-
     # --- reply_email: threaded, gated ---
     calls.clear()
-    tools_email.configure(confirm=allow, preauth=False)
+    tools_email.configure(confirm=allow)
     r = await tools_email.reply_email({"query": "from:alice", "body": "thanks"})
     assert r == "REPLIED" and calls["reply"] == ("alice@x.com", "thanks"), (r, calls.get("reply"))
-    tools_email.configure(confirm=deny, preauth=False)
+    tools_email.configure(confirm=deny)
     assert (await tools_email.reply_email({"query": "from:alice", "body": "no"})).startswith("User DENIED")
     print("PASS reply_email gated (approve sends, deny blocks)")
 
@@ -106,14 +99,14 @@ async def main():
 
     # --- create_draft: reversible, NEVER gated ---
     calls.clear()
-    tools_email.configure(confirm=boom, preauth=False)  # boom = fail if a gate fires
+    tools_email.configure(confirm=boom)  # boom = fail if a gate fires
     assert (await tools_email.create_draft({"to": "d@x.com", "subject": "s", "body": "b"})) == "DRAFTED"
     assert calls["draft"] == "d@x.com", calls.get("draft")
     print("PASS create_draft is ungated")
 
     # --- trash_email: gated (deny blocks) ---
     calls.clear()
-    tools_email.configure(confirm=deny, preauth=False)
+    tools_email.configure(confirm=deny)
     r = await tools_email.trash_email({"query": "from:spam"})
     assert r.startswith("User DENIED") and "trash" not in calls, r
     print("PASS trash_email denied -> not trashed")

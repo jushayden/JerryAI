@@ -12,6 +12,7 @@ _fd, _name = tempfile.mkstemp(suffix=".jsonl", prefix="events_test_")
 os.close(_fd)
 _tmp = Path(_name)
 config.EVENTS_LOG = _tmp
+config.ARTIFACT_DIR = Path(tempfile.mkdtemp(prefix="jerry_audit_test_"))
 
 import state  # noqa: E402
 
@@ -27,15 +28,14 @@ def reset():
 reset()
 assert state.compose_brief() == "Nothing yet — send me a task.", state.compose_brief()
 
-# --- new_task: preauth parsing + queue depth ---
-t1 = state.new_task("!wipe the drive")
-assert t1.preauthorized is True
-assert t1.text == "wipe the drive"
+# --- new_task: origin/source + literal ! + queue depth ---
+t1 = state.new_task("!wipe the drive", origin="badge", source_url="https://example.test/form")
+assert t1.text == "!wipe the drive"
+assert t1.origin == "badge" and t1.source_url == "https://example.test/form"
 assert t1.status == "queued"
 assert len(t1.id) == 6
 
-t2 = state.new_task("send an email")
-assert t2.preauthorized is False
+t2 = state.new_task("send an email", origin="telegram")
 assert t2.text == "send an email"
 
 assert state.queue.qsize() == 2
@@ -66,7 +66,7 @@ assert t4.status == "queued"
 # --- populated brief ---
 brief = state.compose_brief()
 assert "Done (1):" in brief, brief
-assert t1.id in brief and "wipe the drive" in brief
+assert t1.id in brief and "!wipe the drive" in brief
 assert "[12s]" in brief, brief
 assert "Running:" in brief and "latest step" in brief
 assert "x" * 60 in brief and "x" * 61 not in brief  # 60-char truncation
@@ -98,7 +98,16 @@ assert all("ts" in e for e in events)
 kinds = {e["event"] for e in events}
 assert {"task_created", "task_status", "task_step"} <= kinds, kinds
 created = [e for e in events if e["event"] == "task_created"]
-assert created[0]["preauthorized"] is True and created[0]["text"] == "wipe the drive"
+assert created[0]["origin"] == "badge" and created[0]["text"] == "!wipe the drive"
+
+# --- secrets are redacted from events and audit artifacts ---
+state.register_secret("super-secret-123")
+state.audit_event(t1, "test", "secret", {"value": "super-secret-123", "password": "other"})
+audit_path = state.write_audit(t1)
+audit_text = audit_path.read_text(encoding="utf-8")
+assert "super-secret-123" not in audit_text and "other" not in audit_text
+assert "[REDACTED]" in audit_text
+state.forget_secret("super-secret-123")
 
 # --- log_event never raises even on a bad path ---
 config.EVENTS_LOG = Path("Z:/definitely/not/a/real/dir/events.jsonl")
@@ -106,4 +115,6 @@ state.log_event({"event": "should_not_raise"})
 config.EVENTS_LOG = _tmp
 
 _tmp.unlink(missing_ok=True)
+audit_path.unlink(missing_ok=True)
+config.ARTIFACT_DIR.rmdir()
 print("test_state.py: all assertions passed")

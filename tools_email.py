@@ -36,18 +36,16 @@ async def _default_confirm(summary: str) -> bool:
     return ans.strip().lower() in ("y", "yes")
 
 confirm_cb = _default_confirm
-preauthorized = False
 
 
-def configure(confirm=None, preauth=False):
-    """Set the confirmation callback and preauthorization flag for send/trash actions.
+def configure(confirm=None):
+    """Set the confirmation callback used to gate send/reply/trash (mirrors tools_fs).
 
     Call this per task (as main._run_real_agent does) so send/reply/trash prompt the
     user's phone rather than a blocking console input.
     """
-    global confirm_cb, preauthorized
+    global confirm_cb
     confirm_cb = confirm if confirm is not None else _default_confirm
-    preauthorized = preauth
 
 
 def _service():
@@ -276,10 +274,9 @@ async def send_email(args: dict) -> str:
         bcc = str(args.get("bcc") or "").strip() or None
         if not to:
             return "Error: send_email needs a 'to' address."
-        if not preauthorized:
-            ok = await confirm_cb(_confirm_text("Send a new email", to, subject, body, cc, bcc))
-            if not ok:
-                return "User DENIED sending this email. Do not retry — report that it was not sent."
+        ok = await confirm_cb(_confirm_text("Send a new email", to, subject, body, cc, bcc))
+        if not ok:
+            return "User DENIED sending this email. Do not retry — report that it was not sent."
         return await asyncio.to_thread(_send_sync, to, subject, body, cc, bcc)
     except Exception as e:
         return f"Error: {e}"
@@ -298,10 +295,9 @@ async def reply_email(args: dict) -> str:
             return (f"No message matched '{query}'. Run scan_inbox to see what's there, "
                     "or refine the query.")
         subj = match["subject"] if match["subject"].lower().startswith("re:") else "Re: " + match["subject"]
-        if not preauthorized:
-            ok = await confirm_cb(_confirm_text("Reply to an email", match["from"], subj, body))
-            if not ok:
-                return "User DENIED sending this reply. Do not retry."
+        ok = await confirm_cb(_confirm_text("Reply to an email", match["from"], subj, body))
+        if not ok:
+            return "User DENIED sending this reply. Do not retry."
         return await asyncio.to_thread(_reply_sync, match, body)
     except Exception as e:
         return f"Error: {e}"
@@ -333,10 +329,9 @@ async def trash_email(args: dict) -> str:
             return f"No message matched '{query}'."
         summary = (f"Move this email to Trash:\nFrom: {match['from']}\n"
                    f"Subject: {match['subject']}\n\n\"{_one_line(match['snippet'], 200)}\"")
-        if not preauthorized:
-            ok = await confirm_cb(summary)
-            if not ok:
-                return "User DENIED trashing this email. Do not retry."
+        ok = await confirm_cb(summary)
+        if not ok:
+            return "User DENIED trashing this email. Do not retry."
         return await asyncio.to_thread(_trash_sync, match["id"])
     except Exception as e:
         return f"Error: {e}"

@@ -16,15 +16,13 @@ async def _default_confirm(summary: str) -> bool:
     return ans.strip().lower() in ("y", "yes")
 
 confirm_cb = _default_confirm
-preauthorized = False
 touched: list[Path] = []  # paths written/moved/deleted this task, for report verification
 
 
-def configure(confirm=None, preauth=False):
-    """Set the confirmation callback and preauthorization flag for destructive ops."""
-    global confirm_cb, preauthorized
+def configure(confirm=None):
+    """Set the confirmation callback for destructive operations."""
+    global confirm_cb
     confirm_cb = confirm if confirm is not None else _default_confirm
-    preauthorized = preauth
     touched.clear()
 
 
@@ -100,10 +98,9 @@ async def delete_file(args: dict) -> str:
             summary = f"Delete folder {p} and everything in it ({n} items)"
         else:
             summary = f"Delete file: {p}"
-        if not preauthorized:
-            ok = await confirm_cb(summary)
-            if not ok:
-                return "User DENIED the deletion. Do not retry."
+        ok = await confirm_cb(summary)
+        if not ok:
+            return "User DENIED the deletion. Do not retry."
         if p.is_dir():
             shutil.rmtree(p)
         else:
@@ -297,7 +294,7 @@ TOOLS: dict[str, dict] = {
     "delete_file": {
         "schema": _schema(
             "delete_file",
-            "Delete a file. Requires user approval unless the task was preauthorized.",
+            "Delete a file. Always requires fresh user approval.",
             {"path": {"type": "string", "description": "Path to the file to delete"}},
             ["path"],
         ),

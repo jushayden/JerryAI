@@ -1,24 +1,68 @@
-"""Task records, queue, and event log for Pocket Agent (Track A)."""
+"""Task records, queue, audit trails, and event logging for Pocket Agent."""
 import asyncio
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Literal
 
 import config
+
+
+TaskOrigin = Literal["telegram", "badge", "internal"]
+_SENSITIVE_KEYS = re.compile(r"pass(word)?|secret|token|otp|code|credential|authorization", re.I)
+_secret_values: set[str] = set()
+
+
+def register_secret(value: str) -> None:
+    """Register a live secret so every logger/audit renderer can redact it."""
+    if value:
+        _secret_values.add(value)
+
+
+def forget_secret(value: str) -> None:
+    _secret_values.discard(value)
+
+
+def redact_text(value: Any) -> str:
+    text = str(value)
+    for secret in sorted(_secret_values, key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    return text
+
+
+def _sanitize(value: Any, key: str = "") -> Any:
+    if key and _SENSITIVE_KEYS.search(key):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(k): _sanitize(v, str(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize(v) for v in value]
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
 
 
 @dataclass
 class TaskRecord:
     id: str
     text: str
+    origin: TaskOrigin = "telegram"
+    source_url: str | None = None
     status: str = "queued"  # queued|running|done|failed|needs_attention|cancelled
     started: float | None = None
     finished: float | None = None
     steps: list[str] = field(default_factory=list)
     needs: str | None = None
     result: str | None = None
-    preauthorized: bool = False
+    status_msg_id: int | None = None
+    screenshot: str | None = None
+    artifacts: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    audit: list[dict[str, Any]] = field(default_factory=list)
 
 
 tasks: list[TaskRecord] = []
@@ -26,46 +70,115 @@ queue: asyncio.Queue = asyncio.Queue()
 current: TaskRecord | None = None
 
 
-def new_task(text: str) -> TaskRecord:
-    """Create a TaskRecord from user text ("!" prefix = preauthorized), enqueue it."""
-    preauth = False
-    if text.startswith("!"):
-        preauth = True
-        text = text[1:].strip()
-    task = TaskRecord(id=uuid.uuid4().hex[:6], text=text, preauthorized=preauth)
+def new_task(
+    text: str,
+    *,
+    origin: TaskOrigin = "telegram",
+    source_url: str | None = None,
+) -> TaskRecord:
+    """Create and enqueue a task. The old ``!`` approval bypass is intentionally gone."""
+    task = TaskRecord(
+        id=uuid.uuid4().hex[:6],
+        text=text.strip(),
+        origin=origin,
+        source_url=source_url or None,
+    )
     tasks.append(task)
     queue.put_nowait(task)
-    log_event({"event": "task_created", "task": task.id, "text": task.text,
-               "preauthorized": task.preauthorized})
+    log_event({
+        "event": "task_created",
+        "task": task.id,
+        "text": task.text,
+        "origin": task.origin,
+        "source_url": task.source_url,
+    })
+    audit_event(task, "task", "created", {"origin": origin, "source_url": source_url})
     return task
 
 
 def mark(task: TaskRecord, status: str, result: str | None = None) -> None:
-    """Set task status (stamping started/finished) and optional result."""
     task.status = status
     if status == "running":
         task.started = time.time()
     elif status in ("done", "failed", "needs_attention", "cancelled"):
         task.finished = time.time()
     if result is not None:
-        task.result = result
-    log_event({"event": "task_status", "task": task.id, "status": status,
-               "result": result})
+        task.result = redact_text(result)
+    log_event({"event": "task_status", "task": task.id, "status": status, "result": result})
+    audit_event(task, "task", status, {"result": result} if result is not None else None)
 
 
 def add_step(task: TaskRecord, step: str) -> None:
-    """Append a step to the task and log it."""
-    task.steps.append(step)
-    log_event({"event": "task_step", "task": task.id, "step": step})
+    safe = redact_text(step)
+    task.steps.append(safe)
+    log_event({"event": "task_step", "task": task.id, "step": safe})
+
+
+def audit_event(
+    task: TaskRecord,
+    category: str,
+    action: str,
+    details: Any = None,
+    *,
+    ok: bool | None = None,
+) -> None:
+    event = {
+        "ts": time.time(),
+        "category": category,
+        "action": action,
+        "details": _sanitize(details) if details is not None else None,
+    }
+    if ok is not None:
+        event["ok"] = ok
+    task.audit.append(event)
+    log_event({"event": "task_audit", "task": task.id, **event})
+
+
+def add_artifact(task: TaskRecord, path: str | Path) -> None:
+    value = str(path)
+    if value not in task.artifacts:
+        task.artifacts.append(value)
+        audit_event(task, "artifact", "created", {"path": value})
+
+
+def add_source(task: TaskRecord, url: str) -> None:
+    if url and url not in task.sources:
+        task.sources.append(url)
+        audit_event(task, "source", "observed", {"url": url})
+
+
+def write_audit(task: TaskRecord) -> Path:
+    """Render a human-readable, Telegram-friendly audit artifact."""
+    config.ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.ARTIFACT_DIR / f"task_{task.id}_audit.txt"
+    lines = [
+        f"Jerry task audit: {task.id}",
+        f"Origin: {task.origin}",
+        f"Request: {redact_text(task.text)}",
+        f"Status: {task.status}",
+    ]
+    if task.source_url:
+        lines.append(f"Source page: {task.source_url}")
+    lines.append("")
+    for event in task.audit:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(event["ts"]))
+        detail = event.get("details")
+        suffix = "" if detail in (None, "", {}) else " | " + json.dumps(detail, ensure_ascii=False, default=str)
+        ok = "" if "ok" not in event else (" | ok" if event["ok"] else " | failed")
+        lines.append(f"[{stamp}] {event['category']}: {event['action']}{ok}{suffix}")
+    if task.sources:
+        lines.extend(["", "Sources:", *[f"- {u}" for u in task.sources]])
+    path.write_text(redact_text("\n".join(lines)) + "\n", encoding="utf-8")
+    return path
 
 
 def log_event(d: dict) -> None:
-    """Append one JSON line (with ts) to EVENTS_LOG. Never raises."""
+    """Append one sanitized JSON line. Logging must never break a task."""
     try:
-        d = dict(d)
-        d["ts"] = time.time()
+        safe = _sanitize(dict(d))
+        safe["ts"] = safe.get("ts", time.time())
         with open(config.EVENTS_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(d, ensure_ascii=False, default=str) + "\n")
+            f.write(json.dumps(safe, ensure_ascii=False, default=str) + "\n")
     except Exception:
         pass
 
@@ -77,26 +190,21 @@ def _dur(task: TaskRecord) -> str:
 
 
 def compose_brief() -> str:
-    """Telegram-friendly plain-text summary of all task activity."""
     done = [t for t in tasks if t.status == "done"]
     needs = [t for t in tasks if t.status == "needs_attention"]
     queued = [t for t in tasks if t.status == "queued"]
     parts: list[str] = []
     if done:
         lines = [f"Done ({len(done)}):"]
-        for t in done[-5:]:
-            lines.append(f"  {t.id} {t.text[:60]}{_dur(t)}")
+        lines += [f"  {t.id} {t.text[:60]}{_dur(t)}" for t in done[-5:]]
         parts.append("\n".join(lines))
     if current is not None:
         latest = current.steps[-1] if current.steps else "starting"
         parts.append(f"Running: {current.id} {current.text[:60]} → {latest}")
     if needs:
         lines = [f"Needs you ({len(needs)}):"]
-        for t in needs:
-            lines.append(f"  {t.id} {t.text[:60]} — {t.needs or '?'}")
+        lines += [f"  {t.id} {t.text[:60]} — {t.needs or '?'}" for t in needs]
         parts.append("\n".join(lines))
     if queued:
         parts.append(f"Queued ({len(queued)})")
-    if not parts:
-        return "Nothing yet — send me a task."
-    return "\n".join(parts)
+    return "\n".join(parts) if parts else "Nothing yet — send me a task."
