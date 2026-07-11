@@ -597,6 +597,12 @@ async def find_elements(args: dict) -> str:
             })
         _audit("find_elements", {"query": query, "group": group,
                                  "matches": len(matches)}, ok=True)
+        if not matches:
+            return (f"No DOM controls matched '{query or group}'. On app-style sites many "
+                    "controls (color swatches, icon buttons, image pickers, sliders) carry "
+                    "no text in the DOM — use visual_inspect with a plain description "
+                    f"(e.g. visual_inspect(target='the {query or group} option')) instead "
+                    "of retrying text searches.")
         return json.dumps(matches[:30], ensure_ascii=False)
     except Exception as e:
         return f"Error: element search failed: {e}"
