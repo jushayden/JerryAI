@@ -61,10 +61,12 @@ On your phone: message your bot, `/start` once, then just send it tasks. See REA
 ```
 python test_state.py
 python test_tools_fs.py
-python test_browser.py   # opens a visible Chromium window
+python test_tools_email.py   # offline — stubs the Gmail API, no account needed
+python test_browser.py       # opens a visible Chromium window
 ```
 
-Run these before opening a PR if you touched `state.py`, `tools_fs.py`, or `tools_browser.py`.
+Run these before opening a PR if you touched `state.py`, `tools_fs.py`, `tools_email.py`,
+or `tools_browser.py`.
 
 ## 7. Code conventions (keep it lean — hackathon project)
 

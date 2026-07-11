@@ -17,7 +17,7 @@ phone (Telegram, any network) ⇄ Telegram servers ⇄ long polling ⇄ bridge.p
                                              task queue (serial) → agent.py (Ollama tool loop)
                                                   ├─ tools_fs.py       files, apps, screenshots, file-picker
                                                   ├─ tools_browser.py  Playwright — co-drive your real Edge
-                                                  ├─ tools_email.py    Gmail read-only (scan_inbox)
+                                                  ├─ tools_email.py    Gmail: read + send/reply/draft + archive/trash
                                                   ├─ gate.py           deterministic approval gate
                                                   └─ state.py          briefs + events.jsonl audit log
 ```
@@ -54,10 +54,14 @@ form from your profile + facts you give over Telegram, asks when unsure, uploads
 choose, and gates every submit. Files: `tools_browser.py`, `tools_fs.py`, `agent.py`,
 `gate.py`, `edge_codrive.bat`.
 
-### Track B — Email briefing  (Gmail ✅ wired · Outlook ⛏ teammate)
-- **Gmail** (`tools_email.py`, `/inbox`): official **read-only** API. Needs one-time OAuth —
-  follow **[GMAIL_SETUP.md](GMAIL_SETUP.md)**, drop `credentials.json` in the repo root.
-  This is the reference implementation of the integration contract.
+### Track B — Email  (Gmail ✅ wired · Outlook ⛏ teammate)
+- **Gmail** (`tools_email.py`, `/inbox`): official Gmail API, scope `gmail.modify`. Reads the
+  inbox **and** acts on it — `send_email`, `reply_email` (in-thread), `create_draft`,
+  `trash_email`, `mark_read`, `archive_email`. Sending, replying, and trashing are gated
+  through the phone approval flow (drafting/archiving/marking-read are reversible, so they
+  aren't). No permanent delete. Needs one-time OAuth — follow
+  **[GMAIL_SETUP.md](GMAIL_SETUP.md)**, drop `credentials.json` in the repo root. This is the
+  reference implementation of the integration contract.
 - **Outlook** (teammate): new `tools_email_outlook.py` via Microsoft Graph (`Mail.Read`,
   MSAL device-code auth), same `scan_inbox`-shaped tool + `OUTLOOK_SETUP.md`, folded into
   `/inbox`. Heads-up: the Azure app registration is the time risk — start it early.
@@ -95,6 +99,9 @@ Starts the mock-form server (:8000), warms the model, starts the bot + J-badge e
 On your phone: `/start` once (registers you as owner), then just text tasks.
 
 - `/inbox` — email briefing (needs Gmail OAuth)
+- Email as a normal task (needs Gmail OAuth): *"reply to Alice's invoice email saying it's
+  approved"* or *"email hr@acme.com my availability next week"* — the agent composes it and
+  asks you to approve the send on your phone. Add `!` to skip the approval.
 - `/remember key: value` — teach the agent a fact to reuse (e.g. `/remember work authorization: US citizen`)
 - `/brief` · `/status` · `/cancel` · `/testconfirm`
 - `!task text` — pre-authorized (skips approval gates)
@@ -125,7 +132,9 @@ and cooperative sites; weaker on bot-shielded ones).
 3. **Co-drive job application** (centerpiece): run `edge_codrive.bat`, open a real posting,
    J-badge "fill this using my profile, don't submit yet." Watch it fill, ask a clarifying
    question, attach your resume; then approve the submit from your phone.
-4. `/inbox` — local model reads your Gmail and briefs you, flagging what matters.
+4. `/inbox` — local model reads your Gmail and briefs you, flagging what matters. Then
+   *"reply to that one from Alice saying I'll have it Friday"* — watch the approval card
+   with the drafted reply hit your phone; Approve to send it in-thread.
 5. `/brief` — the session digest.
 
 ## Demo-day checklist
@@ -135,12 +144,14 @@ and cooperative sites; weaker on bot-shielded ones).
 - [ ] One full run with the phone on **cellular** (proves cross-network control)
 - [ ] `edge_codrive.bat` run + one real co-drive form fill incl. resume upload
 - [ ] Rehearse `/cancel` mid-task; know your hotspot fallback if venue wifi blocks Telegram
-- [ ] Gmail OAuth done + `/inbox` returns a real summary
+- [ ] Gmail OAuth done (re-consented for send if upgrading) + `/inbox` returns a real
+      summary + one approved test send lands in the recipient's inbox
 - [ ] Honest limits to say first: no social posting (platform review/cost); closed
       shadow-DOM forms invisible; the gate is rules-first, not airtight; the agent stops at
       CAPTCHAs by design (it won't solve them).
 
 ## Tests
 
-`python test_state.py` · `python test_tools_fs.py` · `python test_browser.py`
-(browser test opens a visible Chromium window and drives the mock form end to end)
+`python test_state.py` · `python test_tools_fs.py` · `python test_tools_email.py` · `python test_browser.py`
+(email test is offline — stubs the Gmail API, no account needed; browser test opens a
+visible Chromium window and drives the mock form end to end)

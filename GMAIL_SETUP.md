@@ -1,8 +1,10 @@
 # Gmail setup (one-time, ~5 minutes)
 
-The `scan_inbox` tool reads your Gmail **read-only**. It needs a Google OAuth
-"Desktop app" client. Works with a personal @gmail.com account — no verification,
-no billing.
+The Gmail tools let the agent **read your inbox and send, reply, draft, archive, and
+trash** email on your behalf (scope `gmail.modify` — it cannot permanently delete;
+trashed mail is recoverable). Sending, replying, and trashing are gated: the agent asks
+you to approve on your phone first. It needs a Google OAuth "Desktop app" client. Works
+with a personal @gmail.com account — no verification, no billing.
 
 ## 0. Install the libraries (if not already done)
 
@@ -47,16 +49,22 @@ opens **once**:
 1. Pick your Gmail account.
 2. On "Google hasn't verified this app" click **Continue** (or Advanced → Go to
    Pocket Agent). This appears because the app is in Testing mode — that's fine.
-3. Allow **read-only** Gmail access.
+3. Allow the requested Gmail access (**read, compose, send, and modify** — the agent
+   still can't permanently delete). Tick the box(es) and continue.
 
 A `token.json` is then saved next to `credentials.json` and reused from then on —
 no more browser prompts.
 
+> **Upgrading from an old read-only setup?** If you already had `token.json` from when
+> the tool was read-only, **delete `token.json`** and run once more — the added scopes
+> won't take effect until you re-consent, and you'll otherwise get an "insufficient
+> permission" error the first time you try to send.
+
 ## Notes
 
-- **Secrets:** `credentials.json` and `token.json` grant read access to your
-  inbox. Keep them private and make sure both are listed in `.gitignore` before
-  committing anything.
+- **Secrets:** `credentials.json` and `token.json` now grant read **and send/modify**
+  access to your account — treat them like a password. Keep them private and make sure
+  both are listed in `.gitignore` before committing anything.
 - **Token expiry:** while the consent screen is in Testing mode, Google expires
   the refresh token after ~7 days. If `/inbox` starts failing with an auth error,
   delete `token.json` and run it again to re-consent.

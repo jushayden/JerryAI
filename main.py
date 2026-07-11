@@ -53,6 +53,7 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         for t in recent)
 
     tools_browser.configure(confirm=bridge.confirm, preauth=task.preauthorized)
+    tools_email.configure(confirm=bridge.confirm, preauth=task.preauthorized)
     result = await agent.run_task(
         task.text,
         preauthorized=task.preauthorized,
