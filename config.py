@@ -69,6 +69,7 @@ EVENTS_LOG = PROJECT_ROOT / "events.jsonl"
 SCREENSHOT_DIR = PROJECT_ROOT / "screenshots"
 ARTIFACT_DIR = PROJECT_ROOT / "artifacts"
 DOWNLOAD_DIR = ARTIFACT_DIR / "downloads"
+UPLOAD_DIR = ARTIFACT_DIR / "uploads"  # permanent; files the user sends via Telegram
 
 # --- Co-drive: attach to the user's real Edge via CDP when available ---
 CDP_PORT = 9222

@@ -11,6 +11,8 @@ import tools_fs
 async def main():
     tmp = (config.SANDBOX_ROOT / f"_pocket_agent_test_{uuid.uuid4().hex[:8]}").resolve()
     tmp.mkdir(parents=True)
+    config.PROFILE_EXTRA_PATH = tmp / "profile_extra_test.yaml"
+    config.UPLOAD_DIR = tmp / "uploads"
     try:
         # --- write / read round-trip ---
         f = tmp / "sub" / "hello.txt"
@@ -104,6 +106,35 @@ async def main():
         assert shot.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
         shot.unlink()
         print(f"PASS take_screenshot ({size} bytes PNG, deleted after check)")
+
+        # --- remember_fact dedups through profile_store, not raw append ---
+        r = await tools_fs.remember_fact({"key": "e2e test pref", "value": "L"})
+        assert "Remembered" in r, r
+        r = await tools_fs.remember_fact({"key": "e2e test pref", "value": "XL"})
+        assert "Remembered" in r, r
+        prof = await tools_fs.read_profile({})
+        assert prof.count("e2e_test_pref") == 1 and "e2e_test_pref: XL" in prof, prof
+        print("PASS remember_fact dedups (no duplicate raw lines)")
+
+        # --- list_uploads: empty, then populated, newest first ---
+        r = await tools_fs.list_uploads({})
+        assert r == "No files have been uploaded yet.", r
+        config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        (config.UPLOAD_DIR / "older.txt").write_text("a", encoding="utf-8")
+        import time as _time
+        _time.sleep(0.05)
+        (config.UPLOAD_DIR / "newer.txt").write_text("b", encoding="utf-8")
+        r = await tools_fs.list_uploads({})
+        assert r.index("newer.txt") < r.index("older.txt"), r  # newest first
+        assert "KB" in r
+        print("PASS list_uploads (empty + newest-first ordering)")
+
+        # --- _read_pdf: garbage bytes never raise, always a graceful Error string ---
+        bad_pdf = tmp / "garbage.pdf"
+        bad_pdf.write_bytes(b"this is not a real pdf file")
+        r = await tools_fs.read_file({"path": str(bad_pdf)})
+        assert r.startswith("Error:") or "could not open PDF" in r, r
+        print("PASS _read_pdf error path (garbage bytes -> graceful Error, never raises)")
 
         # --- registry contract shape ---
         for name, entry in tools_fs.TOOLS.items():

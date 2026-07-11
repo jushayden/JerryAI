@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import config
+import profile_store
 
 
 # --- module-level confirmation state (set via configure()) ---
@@ -40,9 +41,51 @@ def _safe(path_str: str) -> Path:
 
 # --- tool functions (never raise; return "Error: ..." strings) ---
 
+_PDF_MAX_PAGES = 15
+
+
+def _read_pdf(p: Path) -> str:
+    try:
+        import pypdf
+    except ImportError:
+        return "Error: pypdf is not installed."
+    try:
+        reader = pypdf.PdfReader(str(p))
+    except Exception as e:
+        return f"Error: could not open PDF ({e})."
+    if getattr(reader, "is_encrypted", False):
+        try:
+            reader.decrypt("")
+        except Exception:
+            pass
+    n_pages = len(reader.pages)
+    chunks, total, truncated = [], 0, False
+    for page in reader.pages[:_PDF_MAX_PAGES]:
+        text = ""
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            pass
+        chunks.append(text)
+        total += len(text)
+        if total > config.TOOL_RESULT_MAX:
+            truncated = True
+            break
+    body = "\n".join(chunks).strip()
+    if len(body) > config.TOOL_RESULT_MAX:
+        body, truncated = body[: config.TOOL_RESULT_MAX], True
+    if not body:
+        return f"(PDF has {n_pages} page(s) but no extractable text — likely scanned; no OCR available.)"
+    if truncated or n_pages > _PDF_MAX_PAGES:
+        body += f"\n…(truncated — {n_pages} total pages)"
+    return body
+
+
 async def read_file(args: dict) -> str:
     try:
         p = _safe(args["path"])
+        if p.suffix.lower() == ".pdf":
+            return _read_pdf(p)
         text = p.read_text(encoding="utf-8", errors="replace")
         if len(text) > config.TOOL_RESULT_MAX:
             text = text[: config.TOOL_RESULT_MAX] + "\n…(truncated)"
@@ -137,10 +180,9 @@ async def read_profile(args: dict) -> str:
             base = ("(demo persona — profile.yaml not filled in yet)\n"
                     + example.read_text(encoding="utf-8"))
         # Merge in facts the user has volunteered via Telegram (/remember).
-        if config.PROFILE_EXTRA_PATH.exists():
-            extra = config.PROFILE_EXTRA_PATH.read_text(encoding="utf-8").strip()
-            if extra:
-                base += "\n# --- facts you told me later ---\n" + extra
+        extra = profile_store.as_text()
+        if extra:
+            base += "\n# --- facts you told me later ---\n" + extra
         return base
     except Exception as e:
         return f"Error: {e}"
@@ -153,9 +195,7 @@ async def remember_fact(args: dict) -> str:
         value = str(args.get("value", "")).strip()
         if not key or not value:
             return "Error: remember_fact needs both 'key' and 'value'."
-        line = f"{key}: {value}\n"
-        with open(config.PROFILE_EXTRA_PATH, "a", encoding="utf-8") as f:
-            f.write(line)
+        profile_store.upsert(key, value)
         return f"Remembered: {key} = {value}"
     except Exception as e:
         return f"Error: {e}"
@@ -188,7 +228,15 @@ async def pick_file(args: dict) -> str:
                 if val and Path(os.path.expandvars(str(val))).expanduser().is_file():
                     p = Path(os.path.expandvars(str(val))).expanduser()
                     return f"Use this file: {p}"
-        # 2) scan the usual folders for matching extensions.
+        # 1b) same, but from facts saved via /remember or an auto-tagged upload
+        # (e.g. a Telegram-uploaded resume becomes resume_path automatically).
+        extra = profile_store.load()
+        for key in ("resume_path", f"{hint}_path"):
+            val = extra.get(key)
+            if val and Path(os.path.expandvars(val)).expanduser().is_file():
+                p = Path(os.path.expandvars(val)).expanduser()
+                return f"Use this file: {p}"
+        # 2) scan the usual folders for matching extensions, including uploads from Telegram.
         exts = set()
         for k, v in _PICK_EXT.items():
             if k in hint:
@@ -196,7 +244,7 @@ async def pick_file(args: dict) -> str:
         if not exts:
             exts = _PICK_EXT["resume"] | _PICK_EXT["image"]
         home = config.SANDBOX_ROOT
-        roots = [home / "Documents", home / "Desktop", home / "Downloads",
+        roots = [config.UPLOAD_DIR, home / "Documents", home / "Desktop", home / "Downloads",
                  home / "OneDrive" / "Desktop", home / "OneDrive" / "Documents"]
         found = []
         for r in roots:
@@ -213,6 +261,26 @@ async def pick_file(args: dict) -> str:
         listing = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(found))
         return ("Multiple candidate files — DO NOT guess. Ask the user which one to use "
                 f"(use ask_user), then upload_file with its full path:\n{listing}")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+async def list_uploads(args: dict) -> str:
+    """List files the user has sent via Telegram, newest first, with full paths."""
+    try:
+        if not config.UPLOAD_DIR.is_dir():
+            return "No files have been uploaded yet."
+        entries = [f for f in config.UPLOAD_DIR.iterdir() if f.is_file()]
+        entries.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        entries = entries[:30]
+        if not entries:
+            return "No files have been uploaded yet."
+        lines = []
+        for f in entries:
+            st = f.stat()
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
+            lines.append(f"{f.name} ({st.st_size / 1024:.0f} KB, {when}) — {f}")
+        return "\n".join(lines)
     except Exception as e:
         return f"Error: {e}"
 
@@ -252,7 +320,8 @@ TOOLS: dict[str, dict] = {
     "read_file": {
         "schema": _schema(
             "read_file",
-            "Read a text file and return its contents (truncated if long).",
+            "Read a text file (or extract text from a PDF) and return its contents "
+            "(truncated if long).",
             {"path": {"type": "string", "description": "Path to the file"}},
             ["path"],
         ),
@@ -351,5 +420,16 @@ TOOLS: dict[str, dict] = {
             ["hint"],
         ),
         "fn": pick_file,
+    },
+    "list_uploads": {
+        "schema": _schema(
+            "list_uploads",
+            "List files the user has sent via Telegram (documents/photos/audio/video), "
+            "newest first, with full paths. Use when pick_file doesn't find the right file "
+            "or the user refers to something sent earlier (e.g. 'the file from last week').",
+            {},
+            [],
+        ),
+        "fn": list_uploads,
     },
 }

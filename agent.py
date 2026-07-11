@@ -29,6 +29,7 @@ Rules:
 - After changing a selectable option, verify the requested option is reported as checked/selected before finishing. Never claim success from a click alone.
 - On large/dynamic pages, use find_elements to search controls omitted from a truncated digest and choose_option to select an exact semantic radio/checkbox choice. If the requested choice does not exist or is ambiguous, ask the user; never silently choose the closest label.
 - For web forms: browser_goto the page, use the field digest to fill_field/select_option each field from the profile (call read_profile first); for file/attachment fields use pick_file to locate the file then upload_file; click the submit button LAST (the system shows the user a full breakdown and asks them to approve it).
+- Files the user sent from their phone are saved permanently. Use list_uploads to see them (newest first, with paths). If a task mentions "(Most recently uploaded file: ...)" or "(Uploaded file available at: ...)", that note tells you what "it"/"this file"/"the file I sent" refers to — use that path directly rather than asking which file.
 - Keep going until the task is done or truly blocked; work step by step.
 - When finished, respond with a one-paragraph plain-text summary of what you did (no markdown, no tool calls)."""
 
