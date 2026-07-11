@@ -173,7 +173,7 @@ def jobs() -> list[dict]:
     return _jobs
 
 
-def add_job(text: str, spec: str, preauth: bool = False, now: datetime | None = None) -> dict:
+def add_job(text: str, spec: str, now: datetime | None = None) -> dict:
     """Create + persist a job. Raises ValueError on a bad spec or a past 'once' time."""
     now = now or datetime.now()
     fields = parse_spec(spec, now)
@@ -181,7 +181,6 @@ def add_job(text: str, spec: str, preauth: bool = False, now: datetime | None = 
         "id": _new_id(),
         "text": text.strip(),
         "spec": " ".join(str(spec).split()),
-        "preauth": bool(preauth),
         "enabled": True,
         "last_run": None,
         "kind": fields["kind"],
@@ -212,7 +211,7 @@ def remove_job(jid: str) -> bool:
 # --- the loop ---
 
 def fire_due(enqueue, log=None, now: datetime | None = None) -> list[str]:
-    """Enqueue every due job and roll it forward. `enqueue(text, preauth, job_id)`.
+    """Enqueue every due job and roll it forward. `enqueue(text, job_id)`.
 
     Returns the ids fired. A recurring job is rescheduled to its next occurrence;
     a spent 'once' job is dropped. One catch-up fire per missed job (not a burst).
@@ -223,7 +222,7 @@ def fire_due(enqueue, log=None, now: datetime | None = None) -> list[str]:
         if not job.get("enabled", True) or job.get("next_run", 0) > now.timestamp():
             continue
         try:
-            enqueue(job["text"], job.get("preauth", False), job["id"])
+            enqueue(job["text"], job["id"])
         except Exception as e:
             if log:
                 log({"event": "schedule_enqueue_failed", "job": job["id"], "error": str(e)})

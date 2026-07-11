@@ -18,9 +18,13 @@ NUM_CTX = 16384
 TEMPERATURE = 0.2
 KEEP_ALIVE = -1
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+VISION_ENABLED = os.getenv("VISION_ENABLED", "1").lower() not in ("0", "false", "no")
+VISION_MODEL = os.getenv("VISION_MODEL", "qwen3-vl:30b-a3b-instruct")
+VISION_MIN_CONFIDENCE = float(os.getenv("VISION_MIN_CONFIDENCE", "0.55"))
+VISION_MAX_ATTEMPTS = 2
 
 # --- Agent loop bounds ---
-MAX_STEPS = 15
+MAX_STEPS = 25
 MODEL_CALL_TIMEOUT = 120  # seconds per model call; human waits (ask/confirm) are NOT capped
                           # by a task clock — MAX_STEPS + this bound the machine time instead
 CONFIRM_TIMEOUT = 300   # seconds waiting for phone approval; timeout == deny
@@ -53,12 +57,18 @@ APP_ALLOWLIST = {
     "edge": "msedge",
 }
 BROWSER_PROFILE_DIR = PROJECT_ROOT / "browser_profile"
+EDGE_CODRIVE_PROFILE_DIR = Path(os.getenv(
+    "EDGE_CODRIVE_PROFILE_DIR",
+    str(Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "JerryAI" / "EdgeProfile"),
+))
 
 # --- Data files ---
 PROFILE_PATH = PROJECT_ROOT / "profile.yaml"
 PROFILE_EXTRA_PATH = PROJECT_ROOT / "profile_extra.yaml"  # facts the user gives via Telegram
 EVENTS_LOG = PROJECT_ROOT / "events.jsonl"
 SCREENSHOT_DIR = PROJECT_ROOT / "screenshots"
+ARTIFACT_DIR = PROJECT_ROOT / "artifacts"
+DOWNLOAD_DIR = ARTIFACT_DIR / "downloads"
 
 # --- Scheduler ---
 SCHEDULE_PATH = PROJECT_ROOT / "schedules.json"  # persisted recurring tasks
@@ -67,6 +77,8 @@ SCHEDULER_TICK = 30  # seconds between due-job checks
 # --- Co-drive: attach to the user's real Edge via CDP when available ---
 CDP_PORT = 9222
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
+BROWSER_MODE = os.getenv("BROWSER_MODE", "edge").lower()  # edge in production; owned in tests
+EDGE_START_TIMEOUT = float(os.getenv("EDGE_START_TIMEOUT", "20"))
 
 # --- Mock form server ---
 MOCK_FORM_PORT = 8000

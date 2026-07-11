@@ -62,7 +62,7 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         config.SCHEDULE_PATH = Path(td) / "schedules.json"
         schedule._jobs = []
-        job = schedule.add_job("brief my inbox", "daily 08:00", preauth=False, now=NOW)
+        job = schedule.add_job("brief my inbox", "daily 08:00", now=NOW)
         assert job["id"] == "s1" and job["next_run"] > NOW.timestamp()
         assert config.SCHEDULE_PATH.exists(), "add_job should persist"
 
@@ -82,21 +82,21 @@ def main():
 
         # --- fire_due: recurring job fires, advances, stays ---
         schedule._jobs = []
-        rec = schedule.add_job("morning brief", "daily 08:00", preauth=True, now=NOW)
+        rec = schedule.add_job("morning brief", "daily 08:00", now=NOW)
         due_at = datetime.fromtimestamp(rec["next_run"]) + timedelta(seconds=1)
         calls = []
-        fired = schedule.fire_due(lambda t, p, jid: calls.append((t, p, jid)), now=due_at)
+        fired = schedule.fire_due(lambda t, jid: calls.append((t, jid)), now=due_at)
         assert fired == [rec["id"]], fired
-        assert calls == [("morning brief", True, rec["id"])], calls
+        assert calls == [("morning brief", rec["id"])], calls
         assert schedule.jobs() and schedule.jobs()[0]["next_run"] > due_at.timestamp()
-        print("PASS fire_due recurring (enqueued, preauth passed, rolled forward)")
+        print("PASS fire_due recurring (enqueued, rolled forward)")
 
         # --- fire_due: 'once' fires then is removed ---
         schedule._jobs = []
         onej = schedule.add_job("one shot", f"once {(NOW + timedelta(hours=2)).strftime('%Y-%m-%d %H:%M')}", now=NOW)
         after = datetime.fromtimestamp(onej["next_run"]) + timedelta(seconds=1)
         calls2 = []
-        schedule.fire_due(lambda t, p, jid: calls2.append(jid), now=after)
+        schedule.fire_due(lambda t, jid: calls2.append(jid), now=after)
         assert calls2 == [onej["id"]] and schedule.jobs() == [], schedule.jobs()
         print("PASS fire_due once (fires then removed)")
 

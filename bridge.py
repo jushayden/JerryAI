@@ -5,8 +5,10 @@ Manual PTB v22 init — main.py owns the event loop, never app.run_polling().
 import asyncio
 import time
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -29,8 +31,21 @@ _current_run_task: asyncio.Task | None = None  # wraps the running agent call (f
 _allowed_chat_id: int = config.ALLOWED_CHAT_ID
 _pending_confirms: dict[str, asyncio.Future] = {}  # cid -> Future[bool]
 _pending_ask: asyncio.Future | None = None  # Future[str] resolved by next plain text
+_pending_secret: tuple[asyncio.Future, str, str, str | None] | None = None
 _sched_wizard: dict | None = None  # in-progress /schedule setup for the owner
 _status_cards: dict[str, dict] = {}  # task.id -> {msg_id, last, pending, flusher}
+
+
+@dataclass
+class _Secret:
+    value: str
+    expires: float
+    task_id: str | None
+    kind: str
+    domain: str
+
+
+_secrets: dict[str, _Secret] = {}
 
 
 async def _default_agent(task: TaskRecord) -> str:
@@ -65,7 +80,70 @@ async def send_text(text: str) -> None:
     if _app is None or _allowed_chat_id == 0:
         state.log_event({"event": "send_skipped", "reason": "no app or no owner chat"})
         return
-    await _retry(_app.bot.send_message, chat_id=_allowed_chat_id, text=text)
+    await _retry(_app.bot.send_message, chat_id=_allowed_chat_id,
+                 text=state.redact_text(text))
+
+
+async def notify_task_accepted(task: TaskRecord) -> None:
+    """Notify the phone when a task originated outside Telegram (the J badge)."""
+    await send_text(
+        f"J badge task {task.id} accepted.\n"
+        f"Page: {task.source_url or '(not provided)'}\n"
+        f"Request: {task.text}"
+    )
+
+
+def _expire_secrets() -> None:
+    now = time.monotonic()
+    for handle, secret in list(_secrets.items()):
+        if secret.expires <= now:
+            state.forget_secret(secret.value)
+            _secrets.pop(handle, None)
+
+
+async def request_secret(
+    question: str,
+    *,
+    kind: str = "secret",
+    domain: str = "",
+    task_id: str | None = None,
+) -> str:
+    """Request a secret via Telegram and return an opaque, five-minute handle."""
+    global _pending_secret
+    if _pending_secret is not None:
+        raise RuntimeError("another secret request is already pending")
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    _pending_secret = (fut, kind, domain, task_id)
+    where = f" for {domain}" if domain else ""
+    await send_text(
+        f"🔐 {question}{where}\n"
+        "Reply with the value. It will be held in memory for one use and redacted from Jerry's logs."
+    )
+    try:
+        return await asyncio.wait_for(fut, config.CONFIRM_TIMEOUT)
+    finally:
+        if _pending_secret is not None and _pending_secret[0] is fut:
+            _pending_secret = None
+
+
+async def consume_secret(handle: str, *, task_id: str | None = None) -> str:
+    """Consume a secret without exposing it to the model or audit trail."""
+    _expire_secrets()
+    secret = _secrets.pop(handle, None)
+    if secret is None:
+        raise ValueError("secret handle is invalid or expired")
+    if task_id and secret.task_id and task_id != secret.task_id:
+        _secrets[handle] = secret
+        raise ValueError("secret handle belongs to a different task")
+    state.forget_secret(secret.value)
+    return secret.value
+
+
+def clear_task_secrets(task_id: str | None) -> None:
+    for handle, secret in list(_secrets.items()):
+        if task_id is None or secret.task_id == task_id:
+            state.forget_secret(secret.value)
+            _secrets.pop(handle, None)
 
 
 # --- confirm / ask ---
@@ -80,6 +158,9 @@ async def confirm(summary: str) -> bool:
         InlineKeyboardButton("Approve", callback_data=f"cfm:{cid}:y"),
         InlineKeyboardButton("Deny", callback_data=f"cfm:{cid}:n"),
     ]])
+    summary = state.redact_text(summary)
+    if state.current is not None:
+        state.audit_event(state.current, "approval", "requested", {"summary": summary})
     msg = await _retry(_app.bot.send_message, chat_id=_allowed_chat_id,
                        text=f"⚠️ Approval needed:\n{summary}", reply_markup=kb)
     if msg is None:
@@ -99,6 +180,9 @@ async def confirm(summary: str) -> bool:
         state.log_event({"event": "confirm_timeout", "cid": cid})
         return False
     state.log_event({"event": "confirm_answered", "cid": cid, "approved": approved})
+    if state.current is not None:
+        state.audit_event(state.current, "approval", "answered",
+                          {"approved": approved}, ok=approved)
     return approved
 
 
@@ -108,6 +192,8 @@ async def ask_user(question: str) -> str:
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     _pending_ask = fut
     await send_text(f"❓ {question}")
+    if state.current is not None:
+        state.audit_event(state.current, "user_input", "question", {"question": question})
     try:
         return await asyncio.wait_for(fut, config.CONFIRM_TIMEOUT)
     finally:
@@ -117,7 +203,7 @@ async def ask_user(question: str) -> str:
 
 # --- status card ---
 def _render_status(task: TaskRecord) -> str:
-    lines = [f"▶️ {task.text}"]
+    lines = [f"▶️ [{task.origin}] {state.redact_text(task.text)}"]
     lines += [f"→ {s}" for s in task.steps[-6:]]
     return "\n".join(lines)
 
@@ -171,10 +257,10 @@ async def update_status(task: TaskRecord, step: str) -> None:
 
 # --- final report ---
 async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> None:
-    """Send the final report for a task, plus optional screenshot."""
+    """Send final result, evidence, generated artifacts, and a detailed audit."""
     if _app is None or _allowed_chat_id == 0:
         return
-    lines = [f"[{task.status.upper()}] {task.text}"]
+    lines = [f"[{task.status.upper()}] {state.redact_text(task.text)}"]
     if task.result:
         lines.append(f"Result: {task.result}")
     if task.needs:
@@ -183,7 +269,11 @@ async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> N
     if task.started is not None and task.finished is not None:
         meta += f" | Duration: {task.finished - task.started:.0f}s"
     lines.append(meta)
-    await _retry(_app.bot.send_message, chat_id=_allowed_chat_id, text="\n".join(lines))
+    if task.sources:
+        lines.append("Sources:")
+        lines.extend(f"- {url}" for url in task.sources[:10])
+    await _retry(_app.bot.send_message, chat_id=_allowed_chat_id,
+                 text=state.redact_text("\n".join(lines))[:4000])
     if screenshot_path:
         try:
             with open(screenshot_path, "rb") as f:
@@ -194,6 +284,27 @@ async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> N
                 os.remove(screenshot_path)
         except OSError as e:
             state.log_event({"event": "screenshot_failed", "error": str(e)})
+
+    audit_path = state.write_audit(task)
+    files = [p for p in task.artifacts if p != screenshot_path]
+    files.append(str(audit_path))
+    sent_paths: set[str] = set()
+    for raw in files:
+        if raw in sent_paths:
+            continue
+        sent_paths.add(raw)
+        try:
+            with open(raw, "rb") as f:
+                data = f.read()
+            await _retry(
+                _app.bot.send_document,
+                chat_id=_allowed_chat_id,
+                document=InputFile(data, filename=Path(raw).name),
+                caption=f"Task {task.id}: {Path(raw).name}",
+            )
+        except OSError as e:
+            state.log_event({"event": "artifact_failed", "task": task.id,
+                             "path": raw, "error": str(e)})
 
 
 # --- owner capture ---
@@ -234,24 +345,39 @@ async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat_id != _allowed_chat_id:
         return
     await update.message.reply_text(
-        "Pocket Agent ready. Send a task (prefix with ! to preauthorize), "
+        "Pocket Agent ready. Send a task, "
         "/brief, /status, /cancel.")
 
 
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _pending_ask
+    global _pending_ask, _pending_secret
     if not _is_allowed(update):
         return
     text = update.message.text
     if _sched_wizard is not None:
         await _wizard_step(text)
         return
+    if _pending_secret is not None:
+        fut, kind, domain, task_id = _pending_secret
+        _pending_secret = None
+        if not fut.done():
+            handle = "secret:" + uuid.uuid4().hex
+            state.register_secret(text)
+            _secrets[handle] = _Secret(
+                value=text,
+                expires=time.monotonic() + config.CONFIRM_TIMEOUT,
+                task_id=task_id,
+                kind=kind,
+                domain=domain,
+            )
+            fut.set_result(handle)
+        return
     if _pending_ask is not None and not _pending_ask.done():
         fut, _pending_ask = _pending_ask, None
         fut.set_result(text)
         return
     ahead = state.queue.qsize() + (1 if state.current is not None else 0)
-    task = state.new_task(text)
+    task = state.new_task(text, origin="telegram")
     await update.message.reply_text(f"Queued as task {task.id} ({ahead} ahead of it)")
 
 
@@ -273,7 +399,7 @@ async def _on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _pending_ask, _sched_wizard
+    global _pending_ask, _pending_secret, _sched_wizard
     if not _is_allowed(update):
         return
     _sched_wizard = None  # abort any in-progress /schedule setup
@@ -284,9 +410,15 @@ async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if _pending_ask is not None and not _pending_ask.done():
         _pending_ask.cancel()
     _pending_ask = None
+    if _pending_secret is not None:
+        fut = _pending_secret[0]
+        if not fut.done():
+            fut.cancel()
+        _pending_secret = None
     if _current_run_task is not None and not _current_run_task.done():
         if state.current is not None:
             state.mark(state.current, "cancelled")
+            clear_task_secrets(state.current.id)
         _current_run_task.cancel()
     await update.message.reply_text("Stopped.")
 
@@ -297,7 +429,8 @@ async def _on_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     task = state.new_task(
         "Scan my email inbox from the last 24 hours using scan_inbox, then give me a short "
         "briefing: summarize what's new and flag only what looks important (things needing a "
-        "reply, deadlines, money, real people writing directly). Skip routine newsletters/promos.")
+        "reply, deadlines, money, real people writing directly). Skip routine newsletters/promos.",
+        origin="telegram")
     await update.message.reply_text(f"On it — inbox briefing queued as task {task.id}.")
 
 
@@ -333,9 +466,9 @@ _WHEN_HELP = (
 )
 
 
-def _enqueue_scheduled(text: str, preauth: bool, job_id: str) -> None:
-    """Enqueue a due scheduled job as a normal task (reuses the '!' preauth convention)."""
-    task = state.new_task(("!" if preauth else "") + text)
+def _enqueue_scheduled(text: str, job_id: str) -> None:
+    """Enqueue a due scheduled job as a normal task (runs through the usual approval gate)."""
+    task = state.new_task(text, origin="internal")
     if _app is not None and _allowed_chat_id != 0:
         asyncio.create_task(send_text(f"⏰ Scheduled {job_id} started: {task.text[:60]}"))
 
@@ -364,28 +497,16 @@ async def _wizard_step(text: str) -> None:
         await send_text(_WHEN_HELP)
     elif w["step"] == "spec":
         try:
-            schedule.parse_spec(text)
+            job = schedule.add_job(w["text"], text)
         except ValueError as e:
-            await send_text(f"{e}\n\n{_WHEN_HELP}")
-            return
-        w["spec"], w["step"] = " ".join(text.split()), "approval"
-        await send_text(
-            "Run risky actions inside it (like sending email) automatically, or ask you "
-            "each time? Reply *auto* or *ask*. (default: ask)")
-    elif w["step"] == "approval":
-        preauth = text.strip().lower() in ("auto", "a", "yes", "y")
-        try:
-            job = schedule.add_job(w["text"], w["spec"], preauth=preauth)
-        except ValueError as e:
-            w["step"] = "spec"
             await send_text(f"{e}\n\n{_WHEN_HELP}")
             return
         _sched_wizard = None
-        mode = "auto-run" if preauth else "ask each time"
         await send_text(
             f"Scheduled ✓ [{job['id']}] \"{job['text'][:60]}\"\n"
-            f"{schedule.describe(job)} · approval: {mode}\n"
+            f"{schedule.describe(job)}\n"
             f"Next run: {schedule.fmt_next(job)}\n"
+            f"(risky actions inside it still ask for approval when it runs)\n"
             f"/schedules to view · /unschedule {job['id']} to remove")
 
 
@@ -398,9 +519,8 @@ async def _on_schedules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     lines = ["Scheduled tasks:"]
     for j in js:
-        mode = "auto" if j.get("preauth") else "ask"
         lines.append(f"[{j['id']}] {j['text'][:50]}\n   {schedule.describe(j)} · "
-                     f"next {schedule.fmt_next(j)} · {mode}")
+                     f"next {schedule.fmt_next(j)}")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -464,6 +584,7 @@ async def _worker() -> None:
             continue
         state.current = task
         state.mark(task, "running")
+        await update_status(task, "starting")
         run = asyncio.create_task(_run_agent(task))
         _current_run_task = run
         try:
@@ -471,7 +592,11 @@ async def _worker() -> None:
             # kill the task. Machine time is bounded inside the agent loop instead
             # (MAX_STEPS x MODEL_CALL_TIMEOUT) and each human wait by CONFIRM_TIMEOUT.
             result = await run
-            state.mark(task, "done", result)
+            if result.startswith("INCOMPLETE:"):
+                task.needs = result.removeprefix("INCOMPLETE:").strip()
+                state.mark(task, "needs_attention", result)
+            else:
+                state.mark(task, "done", result)
         except asyncio.CancelledError:
             if asyncio.current_task().cancelling():
                 raise  # the worker itself is being cancelled (shutdown)
@@ -487,6 +612,8 @@ async def _worker() -> None:
             except Exception as e:
                 state.log_event({"event": "report_failed", "task": task.id,
                                  "error": str(e)})
+            finally:
+                clear_task_secrets(task.id)
 
 
 # --- lifecycle ---
@@ -547,6 +674,7 @@ async def stop_bridge() -> None:
     _app = None
     _worker_task = None
     _scheduler_task = None
+    clear_task_secrets(None)
     state.log_event({"event": "bridge_stopped"})
 
 
