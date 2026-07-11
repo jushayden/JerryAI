@@ -66,7 +66,7 @@ _confirm_cb = _default_confirm
 
 def configure(confirm=None, task=None, secret_resolver=None):
     """Inject per-task phone callbacks and audit context."""
-    global _confirm_cb, _task, _secret_resolver, _visual_target, _visual_attempts
+    global _confirm_cb, _task, _secret_resolver, _visual_target, _visual_attempts, _scroll_streak
     global _dialog_action, _secret_login_authorization, _page
     _confirm_cb = confirm if confirm is not None else _default_confirm
     _task = task
@@ -78,6 +78,7 @@ def configure(confirm=None, task=None, secret_resolver=None):
     _secret_fields.clear()
     _dom_failures.clear()
     _secret_login_authorization = None
+    _scroll_streak = 0
     if task is not None and getattr(task, "source_url", None):
         _page = None  # force _ctx() to select the exact J-badge source tab
 
@@ -610,6 +611,8 @@ async def find_elements(args: dict) -> str:
 
 async def choose_option(args: dict) -> str:
     """Choose a radio/checkbox/button by semantic label rather than a transient element id."""
+    global _scroll_streak
+    _scroll_streak = 0
     try:
         page = await _ctx()
         await _settle(page)
@@ -650,6 +653,8 @@ async def fill_field(args: dict) -> str:
     el = _last.get(field_id)
     if el is None:
         return f"Error: field {field_id} not in the last extraction — call extract_form_fields."
+    global _scroll_streak
+    _scroll_streak = 0
     try:
         frame = _frame_for(el)
         loc = _control_locator(frame, el, field_id)
@@ -677,6 +682,8 @@ async def select_option(args: dict) -> str:
     el = _last.get(field_id)
     if el is None:
         return f"Error: field {field_id} not in the last extraction — call extract_form_fields."
+    global _scroll_streak
+    _scroll_streak = 0
     try:
         frame = _frame_for(el)
         loc = frame.locator(f'[data-agent-id="{field_id}"]')
@@ -716,6 +723,8 @@ async def click_element(args: dict) -> str:
     el = _last.get(field_id)
     if el is None:
         return f"Error: field {field_id} not in the last extraction — call extract_form_fields."
+    global _scroll_streak
+    _scroll_streak = 0
     try:
         page = await _ctx()
         login_authorized = False
@@ -914,11 +923,24 @@ _SCROLL_JS = """(amt) => {
 }"""
 
 
+_scroll_streak = 0  # consecutive scrolls with no click/fill between them
+
+
 async def scroll_page(args: dict) -> str:
     """Scroll the window — or, on app-style pages where the window is fixed (e.g. car
     configurators), the largest inner scrollable panel. Verifies something MOVED and
-    says so, instead of reporting success while the screen sits still."""
+    says so, instead of reporting success while the screen sits still. Pacing up and
+    down without acting is cut off mechanically: after 3 consecutive scrolls the tool
+    refuses and points to visual_inspect."""
+    global _scroll_streak
     try:
+        _scroll_streak += 1
+        if _scroll_streak > 3:
+            return ("Error: you have scrolled repeatedly without clicking or filling "
+                    "anything — scrolling more will not find it. The control you want "
+                    "is probably visual-only. Call visual_inspect now with a plain "
+                    "description of the target (e.g. 'the red paint swatch'), then "
+                    "visual_click.")
         page = await _ctx()
         amount = max(-4000, min(4000, int(args.get("amount", 700))))
         res = None
@@ -1318,6 +1340,8 @@ async def visual_inspect(args: dict) -> str:
 
 async def visual_click(args: dict) -> str:
     global _visual_target
+    global _scroll_streak
+    _scroll_streak = 0
     try:
         page = await _ctx()
         if await _challenge_on(page):
