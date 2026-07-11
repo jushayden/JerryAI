@@ -27,6 +27,25 @@ MAX_NUDGES = 2
 REPEAT_LIMIT = 3
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_WORD_BEFORE_BRACE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[\s:\-]*$")
+
+
+def _find_balanced_json_objects(text: str) -> list[tuple[int, int]]:
+    """Spans of top-level {...} objects, tolerant of junk characters around them."""
+    spans = []
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    spans.append((start, i + 1))
+    return spans
 
 
 @dataclass
@@ -131,6 +150,25 @@ def extract_tool_calls(message: Any) -> tuple[list[ToolCall], bool]:
             return [call], False
         if isinstance(obj, dict) and ("name" in obj or "function" in obj):
             attempted = True
+
+    # Fallback: model wrapped the call in junk, e.g. ")(((tool_name {...})))"
+    # — find any balanced {...} substring and treat the bare word right
+    # before it as the tool name, with the object itself as the arguments.
+    for start, end in _find_balanced_json_objects(content):
+        try:
+            obj = json.loads(content[start:end])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        call = _call_from_obj(obj)
+        if call:
+            return [call], False
+        match = _WORD_BEFORE_BRACE.search(content[:start])
+        if match:
+            return [ToolCall(name=match.group(1), arguments=obj)], False
+        attempted = True
+
     return [], attempted
 
 

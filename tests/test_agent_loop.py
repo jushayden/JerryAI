@@ -93,6 +93,27 @@ async def test_fenced_json_in_content(tool_ctx, echo_registry):
     assert await agent.run_task("t", tool_ctx) == "ok"
 
 
+async def test_junk_wrapped_call_in_content(tool_ctx, echo_registry):
+    # Real qwen2.5 output seen in the wild: not JSON-in-content, not fenced —
+    # tool name + valid JSON args wrapped in stray punctuation.
+    agent = make_agent(tool_ctx, echo_registry, [
+        final_msg(')(((echo {"text": "wrapped"})))'),
+        final_msg("recovered"),
+    ])
+    assert await agent.run_task("t", tool_ctx) == "recovered"
+    history = agent.client.calls[-1]["messages"]
+    assert any("echo: wrapped" in m.get("content", "") for m in history if m.get("role") == "tool")
+
+
+def test_extract_junk_wrapped_call():
+    calls, malformed = extract_tool_calls(
+        {"content": ')(((social_get_feed {"platform": "instagram", "limit": 3})))'})
+    assert malformed is False
+    assert len(calls) == 1
+    assert calls[0].name == "social_get_feed"
+    assert calls[0].arguments == {"platform": "instagram", "limit": 3}
+
+
 async def test_unknown_tool_self_corrects(tool_ctx, echo_registry):
     agent = make_agent(tool_ctx, echo_registry, [
         tool_call_msg("hallucinated_tool", {}),
