@@ -427,6 +427,18 @@ async def _on_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"On it — inbox briefing queued as task {task.id}.")
 
 
+async def _on_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    task = state.new_task(
+        "Read my profile (read_profile) and find the interests: list. For each interest, "
+        "search DuckDuckGo's HTML site (https://html.duckduckgo.com/html/?q=...) using "
+        "browser_goto and read the results with read_page, then open the top article or two "
+        "and read those too. Give me a short news briefing grouped by interest — what's new, "
+        "one or two lines each, with a source link. Skip anything older than a few days.")
+    await update.message.reply_text(f"On it — news briefing queued as task {task.id}.")
+
+
 async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
         return
@@ -541,6 +553,7 @@ async def start_bridge() -> None:
     app.add_handler(CommandHandler("status", _on_status))
     app.add_handler(CommandHandler("cancel", _on_cancel))
     app.add_handler(CommandHandler("inbox", _on_inbox))
+    app.add_handler(CommandHandler("news", _on_news))
     app.add_handler(CommandHandler("remember", _on_remember))
     app.add_handler(CommandHandler("testconfirm", _on_testconfirm))
     app.add_handler(CallbackQueryHandler(_on_callback, pattern=r"^cfm:"))

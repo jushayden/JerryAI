@@ -163,10 +163,13 @@ user's current tab.
 regression suites green (25/25 on the mock form via the owned-Chromium fallback); CDP
 attach + live co-drive still need a run with `edge_codrive.bat` started and the real phone.
 **Track B (Gmail)** is wired (`/inbox`, registry merge) and waits only on the user's
-`credentials.json`. **Tracks B-Outlook and C (Social/News)** are teammate work — see the
-"Team work split" section of `README.md` for the ready-to-grab specs and the integration
-contract every track follows. This doc is the archival design rationale; README is the
-current source of truth for who-builds-what.
+`credentials.json`. **Track C (Reddit + YouTube read-only search, `/news`)** is wired
+(`tools_social.py`, registry merge — see `SOCIAL_SETUP.md`); social feed reading (X/IG/
+TikTok/FB) stays co-drive-only per the locked scope decision above, so it needs no
+dedicated tool. **Track B-Outlook** is still teammate work — see the "Team work split"
+section of `README.md` for the ready-to-grab spec and the integration contract every
+track follows. This doc is the archival design rationale; README is the current source
+of truth for who-builds-what.
 
 (Original archived reference `_context.pages` note above is superseded by the shipped code.)
 `_context.pages`; add one system-prompt line telling the model t

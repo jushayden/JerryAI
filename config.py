@@ -83,3 +83,9 @@ MOCK_FORM_DIR = PROJECT_ROOT / "mock_form"
 # --- Local endpoint for the Edge J-badge extension (127.0.0.1 only) ---
 LOCAL_PORT = 8765
 LOCAL_TOKEN = os.getenv("LOCAL_TOKEN", "pocket-agent-local")
+
+# --- Social (Track C): Reddit + YouTube read-only search, official free APIs ---
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
+REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "pocket-agent:v1 (by /u/change_me)")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
