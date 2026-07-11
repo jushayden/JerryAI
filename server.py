@@ -65,12 +65,14 @@ async def _get_task(request: web.Request) -> web.Response:
     task = next((t for t in state.tasks if t.id == tid), None)
     if task is None:
         return _cors(web.json_response({"error": "unknown task"}, status=404))
+    import bridge  # lazy: reuse the phone card's step prettifier (no import cycle)
     return _cors(web.json_response({
         "status": task.status,
         "result": task.result,
         "needs": task.needs,
         "step": task.steps[-1] if task.steps else None,
         "steps": len(task.steps),
+        "recent_steps": [bridge._friendly_step(s) for s in task.steps[-5:]],
         "origin": task.origin,
         "sources": task.sources,
         "artifacts": len(task.artifacts),

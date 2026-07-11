@@ -50,39 +50,56 @@
     return resp.json();
   }
 
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function renderWorking(ack, steps) {
+    const items = (steps || []).map((s) => `<li>${esc(s)}</li>`).join("");
+    status.innerHTML = `
+      <div class="pa-live">
+        <div class="pa-spinner"></div>
+        <div class="pa-ack">${esc(ack)}</div>
+      </div>
+      <ul class="pa-steps">${items}</ul>`;
+  }
+
+  function renderDone(t) {
+    const icon = t.status === "done" ? "✅" : t.status === "needs_attention" ? "💬" : "⚠️";
+    const detail = t.result || t.needs || t.status;
+    status.innerHTML = `
+      <div class="pa-verdict">${icon} ${t.status === "done" ? "Done" : esc(t.status)}</div>
+      <div class="pa-result">${esc(detail)}</div>`;
+  }
+
   send.addEventListener("click", async () => {
     const text = input.value.trim();
     if (!text) return;
     send.disabled = true;
     badge.classList.add("pa-busy");
-    status.textContent = "Sending…";
+    renderWorking("Ok — let me start on that…", []);
     try {
       const { id, error } = await api("/task", {
         method: "POST",
         body: JSON.stringify({ text, url: location.href }),
       });
       if (error) throw new Error(error);
-      status.textContent = `Queued as ${id}…`;
       input.value = "";
       clearInterval(polling);
       polling = setInterval(async () => {
         try {
           const t = await api(`/task/${id}`);
           if (t.status === "running") {
-            status.textContent = `Working — step ${t.steps}: ${t.step || "starting"}`;
+            renderWorking("On it — here's what I'm doing:", t.recent_steps);
           } else if (t.status === "queued") {
-            status.textContent = "Queued…";
+            renderWorking("Queued — starting in a moment…", []);
           } else {
             clearInterval(polling);
             badge.classList.remove("pa-busy");
             send.disabled = false;
-            const tag = t.status === "done" ? "✅" : "⚠️ " + t.status;
-            const detail = t.result || t.needs || "";
-            const telegram = t.status === "done" ? " — full report sent to Telegram" : "";
-            status.textContent = `${tag} ${detail}${telegram}`;
+            renderDone(t);
           }
         } catch { /* agent restarting; keep polling */ }
-      }, 1500);
+      }, 1200);
     } catch (e) {
       badge.classList.remove("pa-busy");
       send.disabled = false;

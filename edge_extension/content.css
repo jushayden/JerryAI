@@ -79,6 +79,27 @@
   color: #b9b3d9;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 180px;
+  max-height: 260px;
   overflow-y: auto;
 }
+.pa-live { display: flex; align-items: center; gap: 10px; }
+.pa-spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  border: 3px solid #454060;
+  border-top-color: #b14bf4;
+  animation: pa-spin .8s linear infinite;
+}
+@keyframes pa-spin { to { transform: rotate(360deg); } }
+.pa-ack { color: #fff; font-weight: 600; }
+.pa-steps {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #b9b3d9;
+}
+.pa-steps li { margin: 3px 0; animation: pa-fade .3s ease; }
+@keyframes pa-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; } }
+.pa-verdict { color: #fff; font-weight: 600; margin-bottom: 6px; }
+.pa-result { color: #d9d4f2; }
