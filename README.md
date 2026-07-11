@@ -183,6 +183,24 @@ form task directly to Telegram. Jerry opens task-owned Edge tabs, edits one live
 card, asks for missing information or high-impact approvals, and finishes with a sourced
 summary, screenshot, generated data/download artifacts, and a timestamped audit file.
 
+### Deep web missions (`web_agent`, optional — powered by browser-use)
+
+For LONG missions — multi-site research/comparison, or a many-page flow like a full job
+application — Jerry can delegate to an embedded [browser-use](https://github.com/browser-use/browser-use)
+sub-agent that drives the **same Edge** over CDP for up to `BROWSER_USE_MAX_STEPS` steps
+(default 40, vs the outer loop's 25 total), still on the local Ollama model. Enable with
+`BROWSER_USE_ENABLED=1` in `.env` (`browser-use` installs from requirements.txt; telemetry
+and cloud sync are hard-disabled in `config.py`).
+
+The safety model carries over — deterministically, not by prompt: the sub-agent's `click`
+and Enter-key actions are replaced with gate-checked versions (`gate.is_irreversible_click`
+→ phone approval card; a denial is final), page-JS `evaluate` is removed entirely, and
+file uploads are allow-listed to your resume + Telegram uploads + task downloads only. A
+`look_at_page` action gives it the same qwen3-vl eyes as co-drive for visual questions
+(color swatches, configurators). v1 limits: it never handles passwords/OTPs (it stops and
+reports instead), its CAPTCHA policy is prompt-level (weaker than co-drive's deterministic
+challenge detector), and Enter in a search box may over-gate — one extra tap to approve.
+
 ## Demo script (~6 min)
 
 1. "Make a folder called judges_demo on the Desktop with hello.md — a 3-line pitch." —

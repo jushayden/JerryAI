@@ -14,6 +14,7 @@ import config
 import server
 import state
 import tools_browser
+import tools_browser_use
 import tools_email
 import tools_fs
 import tools_social
@@ -25,6 +26,8 @@ async def _final_screenshot() -> str | None:
     try:
         if tools_browser.page_or_none() is not None:
             res = await tools_browser.TOOLS["screenshot_page"]["fn"]({})
+        elif tools_browser_use.last_screenshot() is not None:
+            return tools_browser_use.last_screenshot()
         else:
             res = await tools_fs.TOOLS["take_screenshot"]["fn"]({})
         if "screenshot saved: " in res:
@@ -70,6 +73,7 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         task=task,
         secret_resolver=bridge.consume_secret,
     )
+    tools_browser_use.configure(confirm=bridge.confirm, task=task, status=status_cb)
     # No preauth bypass any more (the operator build removed `!`); email send/reply/trash
     # and system power actions always gate through the phone, matching the browser gate.
     tools_email.configure(confirm=bridge.confirm)
@@ -87,8 +91,8 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         confirm_cb=bridge.confirm,
         request_secret_cb=secret_cb,
         audit_cb=audit_cb,
-        extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS,
-                     **tools_social.TOOLS, **tools_system.TOOLS},
+        extra_tools={**tools_browser.TOOLS, **tools_browser_use.TOOLS,
+                     **tools_email.TOOLS, **tools_social.TOOLS, **tools_system.TOOLS},
         history=history,
     )
     proof = _verify_touched()
@@ -153,6 +157,7 @@ async def main() -> None:
     finally:
         await server.stop_server()
         await bridge.stop_bridge()
+        await tools_browser_use.shutdown()
         await tools_browser.shutdown()
         form_proc.terminate()
 

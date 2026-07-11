@@ -11,3 +11,4 @@ pypdf
 pycaw; sys_platform == "win32"
 screen-brightness-control; sys_platform == "win32"
 faster-whisper
+browser-use==0.13.4   # pins ollama==0.6.1, pydantic==2.12.5, requests==2.33 (slight downgrades, suite verified)

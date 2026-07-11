@@ -99,3 +99,13 @@ YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")      # tiny|base|small|medium|large-v3
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")    # auto|cpu|cuda
 WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8")  # int8|float16|float32
+
+# --- browser-use web sub-agent (web_agent tool) ---
+# Kill every phone-home path BEFORE browser_use is ever imported (config is imported
+# first everywhere). ANONYMIZED_TELEMETRY defaults to TRUE upstream; cloud sync follows it.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
+BROWSER_USE_ENABLED = os.getenv("BROWSER_USE_ENABLED", "0").lower() not in ("0", "false", "no")
+BROWSER_USE_MODEL = os.getenv("BROWSER_USE_MODEL", MODEL)
+BROWSER_USE_MAX_STEPS = int(os.getenv("BROWSER_USE_MAX_STEPS", "40"))
+BROWSER_USE_STEP_TIMEOUT = int(os.getenv("BROWSER_USE_STEP_TIMEOUT", "120"))  # secs per sub-agent step
