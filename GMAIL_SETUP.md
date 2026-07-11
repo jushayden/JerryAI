@@ -1,13 +1,18 @@
 # Gmail setup (one-time, ~5 minutes)
 
-The `scan_inbox` tool reads your Gmail **read-only**. It needs a Google OAuth
-"Desktop app" client. Works with a personal @gmail.com account — no verification,
-no billing.
+The Gmail tools let the agent **read your inbox and send, reply, draft, and trash** email
+on your behalf (scope `gmail.modify` — it cannot permanently delete; trashed mail is
+recoverable). Sending, replying, and trashing are gated: the agent asks you to approve on
+your phone first. It needs a Google OAuth "Desktop app" client. Works with a personal
+@gmail.com account — no verification, no billing.
 
-## 0. Install the libraries (if not already done)
+## 0. Install the libraries
+
+These ship in `requirements.txt`, so `pip install -r requirements.txt` already covers them.
+If you set the project up before they were added, run:
 
 ```
-pip install --user google-api-python-client google-auth-oauthlib
+pip install google-api-python-client google-auth-oauthlib
 ```
 
 ## 1. Create a Google Cloud project
@@ -47,18 +52,28 @@ opens **once**:
 1. Pick your Gmail account.
 2. On "Google hasn't verified this app" click **Continue** (or Advanced → Go to
    Pocket Agent). This appears because the app is in Testing mode — that's fine.
-3. Allow **read-only** Gmail access.
+3. Allow the requested Gmail access (**read, compose, send, and modify** — the agent
+   still can't permanently delete). Tick the box(es) and continue.
 
 A `token.json` is then saved next to `credentials.json` and reused from then on —
 no more browser prompts.
 
+> **Upgrading from an old read-only setup?** Nothing to do by hand. If your existing
+> `token.json` only has the read-only scope, the agent notices, discards it, and re-opens
+> the consent browser **once** automatically the next time a Gmail tool runs — approve it
+> and you're on the new scope. (No manual delete, no "insufficient permission" error.)
+
 ## Notes
 
-- **Secrets:** `credentials.json` and `token.json` grant read access to your
-  inbox. Keep them private and make sure both are listed in `.gitignore` before
-  committing anything.
-- **Token expiry:** while the consent screen is in Testing mode, Google expires
-  the refresh token after ~7 days. If `/inbox` starts failing with an auth error,
-  delete `token.json` and run it again to re-consent.
+- **Secrets:** `credentials.json` and `token.json` now grant read **and send/modify**
+  access to your account — treat them like a password. Keep them private and make sure
+  both are listed in `.gitignore` before committing anything.
+- **Stop the weekly re-consent (recommended):** while the consent screen is in **Testing**
+  mode, Google expires the refresh token after ~7 days, so you'd have to re-approve weekly.
+  To avoid that, go to **OAuth consent screen → Publishing status → Publish app** (set it to
+  *In production*). For personal use you do **not** need Google's verification — you'll still
+  see the one-time "unverified app" warning (click through it), but the token stops expiring.
+- **If auth ever fails anyway** (revoked access, etc.), the agent just re-opens the consent
+  browser once on the next run — you don't need to touch `token.json` yourself.
 - **Wrong/missing file:** if you see `Error: Gmail is not set up: ...credentials.json not found`,
   the JSON from step 4 isn't at the exact path above.

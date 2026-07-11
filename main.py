@@ -68,6 +68,7 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         task=task,
         secret_resolver=bridge.consume_secret,
     )
+    tools_email.configure(confirm=bridge.confirm, preauth=task.preauthorized)
     prompt = task.text
     if task.source_url:
         prompt += (
