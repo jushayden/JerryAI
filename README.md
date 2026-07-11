@@ -5,6 +5,9 @@ cloud API anywhere in the loop), and is **controlled from your phone** via a Tel
 bot: send a task, the PC does it (files, apps, browser, form-filling from your saved
 profile), your phone gets a report with a proof screenshot.
 
+> New to this repo? Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** for team setup,
+> secrets handling, and git workflow.
+
 ## Architecture
 
 ```
