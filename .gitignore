@@ -1,0 +1,11 @@
+.env
+credentials.json
+token.json
+profile.yaml
+events.jsonl
+browser_profile/
+screenshots/
+__pycache__/
+*.pyc
+.code-review-graph/
+.claude/settings.local.json

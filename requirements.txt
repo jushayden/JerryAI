@@ -1,0 +1,6 @@
+ollama>=0.6
+python-telegram-bot>=22
+playwright>=1.60
+pyyaml
+python-dotenv
+mss

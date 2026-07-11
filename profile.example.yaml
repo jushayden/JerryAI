@@ -1,0 +1,19 @@
+# Digital-twin profile. Copy to profile.yaml and fill with YOUR real info.
+# profile.yaml is gitignored — this example ships a fake persona so the repo stays PII-free.
+name: Alex Demo
+email: alex.demo@example.com
+phone: "+1 555 010 4477"
+address: "42 Demo Street, Springfield, USA"
+company: Pocket Agent Labs
+title: Student / Builder
+education: B.Sc. Computer Science, Springfield University (2027)
+links:
+  github: https://github.com/alexdemo
+  linkedin: https://linkedin.com/in/alexdemo
+tshirt_size: M
+dietary: none
+# Absolute path to your resume PDF — used by upload_file on job applications:
+resume_path: C:\Users\you\Documents\resume.pdf
+bio: >
+  CS student building local-first AI agents. Interested in on-device LLMs,
+  automation, and human-in-the-loop safety.

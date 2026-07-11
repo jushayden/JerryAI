@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Pocket Agent (J)",
+  "version": "1.0",
+  "description": "Floating J badge: send the page you're on plus a prompt to your local Pocket Agent.",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
