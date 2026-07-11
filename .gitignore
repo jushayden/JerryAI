@@ -1,0 +1,19 @@
+# Secrets and personal data
+.env
+profile.yaml
+
+# Runtime state (audit log, cooldowns, cache)
+state/
+
+# Browser sessions (logged-in cookies — never commit)
+sessions/
+
+# Agent working dirs
+workspace/
+downloads/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

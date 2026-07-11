@@ -1,0 +1,20 @@
+# Copy to profile.yaml and fill in. profile.yaml is gitignored.
+owner:
+  name: "Arjun"
+  timezone: "Asia/Kolkata"
+  interests: ["ai", "cars", "tech"]
+
+social:
+  reddit:
+    handle: ""
+    subreddits: ["LocalLLaMA", "python"]   # used for "my feed" on Reddit
+  youtube:
+    handle: ""
+    channels: []                            # channel IDs for "my feed"
+  x:
+    handle: ""
+  instagram:
+    handle: ""
+
+agent:
+  persona: "concise, factual, no filler"

@@ -1,0 +1,11 @@
+python-telegram-bot~=21.11
+ollama~=0.4
+playwright~=1.49
+praw~=7.8
+tweepy~=4.15
+google-api-python-client~=2.160
+python-dotenv~=1.0
+PyYAML~=6.0
+httpx~=0.28
+pytest~=8.3
+pytest-asyncio~=0.25
