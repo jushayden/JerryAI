@@ -15,8 +15,8 @@ from email.utils import parsedate_to_datetime
 
 import config
 
-# gmail.modify covers read + send + drafts + label changes (archive/read) + trash.
-# It cannot PERMANENTLY delete — trashed mail is recoverable, which is the point.
+# gmail.modify covers read + send + drafts + trash. It cannot PERMANENTLY delete —
+# trashed mail is recoverable, which is the point.
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 CREDS_PATH = config.PROJECT_ROOT / "credentials.json"
 TOKEN_PATH = config.PROJECT_ROOT / "token.json"
@@ -254,12 +254,6 @@ def _trash_sync(mid: str) -> str:
     return "Moved to Trash (recoverable from Gmail's Trash for 30 days)."
 
 
-def _label_sync(mid: str, remove: list[str], done: str) -> str:
-    svc = _service()
-    svc.users().messages().modify(userId="me", id=mid, body={"removeLabelIds": remove}).execute()
-    return done
-
-
 # --- tool functions (never raise; return "Error: ..." strings) ---
 
 async def scan_inbox(args: dict) -> str:
@@ -348,36 +342,6 @@ async def trash_email(args: dict) -> str:
         return f"Error: {e}"
 
 
-async def mark_read(args: dict) -> str:
-    """Mark the newest message matching a query as read (removes the UNREAD label)."""
-    try:
-        query = str(args.get("query") or "").strip()
-        if not query:
-            return "Error: mark_read needs a 'query' identifying the message."
-        match = await asyncio.to_thread(_find_sync, query)
-        if match is None:
-            return f"No message matched '{query}'."
-        return await asyncio.to_thread(
-            _label_sync, match["id"], ["UNREAD"], f"Marked as read: {match['subject']}")
-    except Exception as e:
-        return f"Error: {e}"
-
-
-async def archive_email(args: dict) -> str:
-    """Archive the newest message matching a query (removes it from the Inbox)."""
-    try:
-        query = str(args.get("query") or "").strip()
-        if not query:
-            return "Error: archive_email needs a 'query' identifying the message."
-        match = await asyncio.to_thread(_find_sync, query)
-        if match is None:
-            return f"No message matched '{query}'."
-        return await asyncio.to_thread(
-            _label_sync, match["id"], ["INBOX"], f"Archived: {match['subject']}")
-    except Exception as e:
-        return f"Error: {e}"
-
-
 def _schema(name: str, description: str, props: dict, required: list[str]) -> dict:
     return {
         "type": "function",
@@ -456,24 +420,5 @@ TOOLS: dict[str, dict] = {
             ["query"],
         ),
         "fn": trash_email,
-    },
-    "mark_read": {
-        "schema": _schema(
-            "mark_read",
-            "Mark the newest email matching a Gmail search 'query' as read. No approval needed.",
-            {"query": _QUERY},
-            ["query"],
-        ),
-        "fn": mark_read,
-    },
-    "archive_email": {
-        "schema": _schema(
-            "archive_email",
-            "Archive the newest email matching a Gmail search 'query' (remove it from the "
-            "Inbox; it stays in All Mail). No approval needed.",
-            {"query": _QUERY},
-            ["query"],
-        ),
-        "fn": archive_email,
     },
 }

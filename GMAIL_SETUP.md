@@ -1,10 +1,10 @@
 # Gmail setup (one-time, ~5 minutes)
 
-The Gmail tools let the agent **read your inbox and send, reply, draft, archive, and
-trash** email on your behalf (scope `gmail.modify` — it cannot permanently delete;
-trashed mail is recoverable). Sending, replying, and trashing are gated: the agent asks
-you to approve on your phone first. It needs a Google OAuth "Desktop app" client. Works
-with a personal @gmail.com account — no verification, no billing.
+The Gmail tools let the agent **read your inbox and send, reply, draft, and trash** email
+on your behalf (scope `gmail.modify` — it cannot permanently delete; trashed mail is
+recoverable). Sending, replying, and trashing are gated: the agent asks you to approve on
+your phone first. It needs a Google OAuth "Desktop app" client. Works with a personal
+@gmail.com account — no verification, no billing.
 
 ## 0. Install the libraries (if not already done)
 

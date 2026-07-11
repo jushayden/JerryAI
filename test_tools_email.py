@@ -42,22 +42,16 @@ async def main():
         calls["trash"] = mid
         return "TRASHED"
 
-    def fake_label(mid, remove, done):
-        calls["label"] = (mid, tuple(remove))
-        return done
-
     tools_email._send_sync = fake_send
     tools_email._reply_sync = fake_reply
     tools_email._draft_sync = fake_draft
     tools_email._trash_sync = fake_trash
-    tools_email._label_sync = fake_label
     fake_match = {"id": "m1", "threadId": "t1", "from": "alice@x.com",
                   "subject": "Invoice", "message_id": "<abc@x>", "references": "", "snippet": "hi"}
     tools_email._find_sync = lambda q: fake_match
 
     # --- registry contract shape ---
-    expected = {"scan_inbox", "send_email", "reply_email", "create_draft",
-                "trash_email", "mark_read", "archive_email"}
+    expected = {"scan_inbox", "send_email", "reply_email", "create_draft", "trash_email"}
     assert set(tools_email.TOOLS) == expected, set(tools_email.TOOLS)
     for name, entry in tools_email.TOOLS.items():
         assert set(entry) >= {"schema", "fn"}, name
@@ -65,7 +59,7 @@ async def main():
         assert entry["schema"]["type"] == "function"
         assert fn["name"] == name and fn["description"] and "parameters" in fn
         assert inspect.iscoroutinefunction(entry["fn"]), name
-    print("PASS TOOLS registry contract shape (7 tools)")
+    print("PASS TOOLS registry contract shape (5 tools)")
 
     # --- missing required args -> graceful Error, no send ---
     assert (await tools_email.send_email({"subject": "x", "body": "y"})).startswith("Error"), "no-to"
@@ -110,15 +104,12 @@ async def main():
     tools_email._find_sync = lambda q: fake_match
     print("PASS reply_email no-match reported")
 
-    # --- create_draft / mark_read / archive_email: reversible, NEVER gated ---
+    # --- create_draft: reversible, NEVER gated ---
     calls.clear()
     tools_email.configure(confirm=boom, preauth=False)  # boom = fail if a gate fires
     assert (await tools_email.create_draft({"to": "d@x.com", "subject": "s", "body": "b"})) == "DRAFTED"
-    assert (await tools_email.mark_read({"query": "from:alice"})).startswith("Marked as read")
-    assert calls["label"] == ("m1", ("UNREAD",)), calls.get("label")
-    assert (await tools_email.archive_email({"query": "from:alice"})).startswith("Archived")
-    assert calls["label"] == ("m1", ("INBOX",)), calls.get("label")
-    print("PASS draft/mark_read/archive are ungated")
+    assert calls["draft"] == "d@x.com", calls.get("draft")
+    print("PASS create_draft is ungated")
 
     # --- trash_email: gated (deny blocks) ---
     calls.clear()

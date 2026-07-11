@@ -17,7 +17,7 @@ phone (Telegram, any network) ⇄ Telegram servers ⇄ long polling ⇄ bridge.p
                                              task queue (serial) → agent.py (Ollama tool loop)
                                                   ├─ tools_fs.py       files, apps, screenshots, file-picker
                                                   ├─ tools_browser.py  Playwright — co-drive your real Edge
-                                                  ├─ tools_email.py    Gmail: read + send/reply/draft + archive/trash
+                                                  ├─ tools_email.py    Gmail: read + send/reply/draft + trash
                                                   ├─ gate.py           deterministic approval gate
                                                   └─ state.py          briefs + events.jsonl audit log
 ```
@@ -57,9 +57,8 @@ choose, and gates every submit. Files: `tools_browser.py`, `tools_fs.py`, `agent
 ### Track B — Email  (Gmail ✅ wired · Outlook ⛏ teammate)
 - **Gmail** (`tools_email.py`, `/inbox`): official Gmail API, scope `gmail.modify`. Reads the
   inbox **and** acts on it — `send_email`, `reply_email` (in-thread), `create_draft`,
-  `trash_email`, `mark_read`, `archive_email`. Sending, replying, and trashing are gated
-  through the phone approval flow (drafting/archiving/marking-read are reversible, so they
-  aren't). No permanent delete. Needs one-time OAuth — follow
+  `trash_email`. Sending, replying, and trashing are gated through the phone approval flow
+  (drafting is reversible, so it isn't). No permanent delete. Needs one-time OAuth — follow
   **[GMAIL_SETUP.md](GMAIL_SETUP.md)**, drop `credentials.json` in the repo root. This is the
   reference implementation of the integration contract.
 - **Outlook** (teammate): new `tools_email_outlook.py` via Microsoft Graph (`Mail.Read`,
