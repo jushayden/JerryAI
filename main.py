@@ -69,7 +69,9 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         task=task,
         secret_resolver=bridge.consume_secret,
     )
-    tools_email.configure(confirm=bridge.confirm, preauth=task.preauthorized)
+    # No preauth bypass any more (the operator build removed `!`); email send/reply/trash
+    # always gate through the phone, matching the browser gate.
+    tools_email.configure(confirm=bridge.confirm)
     prompt = task.text
     if task.source_url:
         prompt += (
