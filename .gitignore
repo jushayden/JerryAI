@@ -4,6 +4,7 @@ token.json
 profile.yaml
 profile_extra.yaml
 events.jsonl
+schedules.json
 browser_profile/
 screenshots/
 __pycache__/

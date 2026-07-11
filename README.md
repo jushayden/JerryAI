@@ -96,8 +96,25 @@ On your phone: `/start` once (registers you as owner), then just text tasks.
 
 - `/inbox` — email briefing (needs Gmail OAuth)
 - `/remember key: value` — teach the agent a fact to reuse (e.g. `/remember work authorization: US citizen`)
+- `/schedule` — set up a recurring task (interactive: it asks *what*, *when*, and whether to
+  auto-run). `/schedules` to list, `/unschedule <id>` to remove. See below.
 - `/brief` · `/status` · `/cancel` · `/testconfirm`
 - `!task text` — pre-authorized (skips approval gates)
+
+### Scheduled tasks
+
+`/schedule` walks you through building a recurring job — it prompts for the task text, then
+the timing, then whether risky actions inside it auto-run or wait for your approval:
+
+```
+When should it run? Examples:
+  daily 08:00 · weekdays 09:30 · weekly mon 07:00 · every 2h · every 30m · once 2026-07-12 14:00
+```
+
+Due jobs are enqueued through the normal queue → agent → phone-report pipeline (and still hit
+the approval gate unless you chose auto-run). Jobs persist to `schedules.json` across restarts.
+Example: schedule *"scan my inbox from the last 24h and flag what matters"* for `weekdays 08:00`
+to get a briefing on your phone every workday morning.
 
 ## Co-drive your real browser (the app-filler demo)
 
@@ -142,5 +159,6 @@ and cooperative sites; weaker on bot-shielded ones).
 
 ## Tests
 
-`python test_state.py` · `python test_tools_fs.py` · `python test_browser.py`
-(browser test opens a visible Chromium window and drives the mock form end to end)
+`python test_state.py` · `python test_tools_fs.py` · `python test_schedule.py` · `python test_browser.py`
+(schedule test is offline — deterministic, no Telegram/network; browser test opens a
+visible Chromium window and drives the mock form end to end)
