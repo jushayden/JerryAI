@@ -77,7 +77,9 @@
             badge.classList.remove("pa-busy");
             send.disabled = false;
             const tag = t.status === "done" ? "✅" : "⚠️ " + t.status;
-            status.textContent = `${tag} ${t.result || t.needs || ""}`;
+            const detail = t.result || t.needs || "";
+            const telegram = t.status === "done" ? " — full report sent to Telegram" : "";
+            status.textContent = `${tag} ${detail}${telegram}`;
           }
         } catch { /* agent restarting; keep polling */ }
       }, 1500);
