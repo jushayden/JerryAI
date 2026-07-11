@@ -107,7 +107,7 @@ On your phone: `/start` once (registers you as owner), then just text tasks.
 - `/inbox` — email briefing (needs Gmail OAuth)
 - Email as a normal task (needs Gmail OAuth): *"reply to Alice's invoice email saying it's
   approved"* or *"email hr@acme.com my availability next week"* — the agent composes it and
-  asks you to approve the send on your phone. Add `!` to skip the approval.
+  asks you to approve the send on your phone.
 - `/news` — briefing over your `interests:` list (no setup needed beyond `profile.yaml`)
 - Just ask in plain language for Reddit/YouTube: "search reddit for X", "what's hot in r/LocalLLaMA", "find youtube videos about Y" (needs [SOCIAL_SETUP.md](SOCIAL_SETUP.md) keys)
 - `/remember key: value` — teach the agent a fact to reuse (e.g. `/remember work authorization: US citizen`)
@@ -142,6 +142,19 @@ the approval gate for high-impact actions (there is no auto-run bypass — same 
 typed tasks). Jobs persist to `schedules.json` across restarts.
 Example: schedule *"scan my inbox from the last 24h and flag what matters"* for `weekdays 08:00`
 to get a briefing on your phone every workday morning.
+
+## Talk to it (voice messages)
+
+Send a **Telegram voice note** instead of typing — hold the mic, say your task, release.
+It's transcribed **on-device** with faster-whisper (local, no cloud, same as the model),
+the agent echoes back `🎙️ heard: …` so you can see what it understood, then runs it exactly
+like a typed task (risky actions still hit the approval gate). Works for answering the
+agent's questions too — just reply with your voice.
+
+- Configure via `.env` if you want: `WHISPER_MODEL` (`tiny`/`base`/`small`/`medium`/`large-v3`,
+  default `base`), `WHISPER_DEVICE` (`auto`/`cpu`/`cuda`), `WHISPER_COMPUTE` (`int8`/`float16`).
+- The **first** voice note loads the model (downloads ~150 MB for `base`) and is slow — send
+  one to warm it up before a demo. Later ones are fast, especially on GPU.
 
 ## Co-drive your real browser (the app-filler demo)
 
@@ -200,11 +213,12 @@ summary, screenshot, generated data/download artifacts, and a timestamped audit 
 ## Tests
 
 `python test_state.py` · `python test_tools_fs.py` · `python test_tools_email.py` ·
-`python test_tools_system.py` · `python test_schedule.py` · `python test_remote_operator.py` ·
-`python test_vision.py` · `python test_browser.py`
+`python test_tools_system.py` · `python test_schedule.py` · `python test_voice.py` ·
+`python test_remote_operator.py` · `python test_vision.py` · `python test_browser.py`
 (email test is offline — stubs the Gmail API, no account needed; system test is offline —
 stubs the hardware calls; schedule test is offline — deterministic, no Telegram/network;
-browser test opens a visible Chromium window and drives the mock form end to end)
+voice test is offline — stubs Whisper, no model/network; browser test opens a visible
+Chromium window and drives the mock form end to end)
 
 After pulling the vision model, run `python test_vision.py --real` for the local-model smoke test.
 Run `python test_live_vlm.py` for the 30B VLM check against a complex live Microsoft page.

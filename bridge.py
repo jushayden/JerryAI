@@ -5,6 +5,7 @@ Manual PTB v22 init — main.py owns the event loop, never app.run_polling().
 import asyncio
 import os
 import re
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ import config
 import profile_store
 import schedule
 import state
+import voice
 from state import TaskRecord
 
 # --- module state ---
@@ -522,11 +524,30 @@ async def _on_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(f"Forgot '{key}'." if ok else f"Didn't have '{key}'.")
 
 
+async def _dispatch_text(text: str, update: Update | None = None) -> None:
+    """Route a user message (typed OR transcribed from voice) into the ask/queue pipeline."""
+    global _pending_ask
+    if _pending_ask is not None and not _pending_ask.done():
+        fut, _pending_ask = _pending_ask, None
+        fut.set_result(text)
+        return
+    text = _with_upload_context(text)
+    ahead = state.queue.qsize() + (1 if state.current is not None else 0)
+    task = state.new_task(text, origin="telegram")
+    reply = f"Queued as task {task.id} ({ahead} ahead of it)"
+    if update is not None:
+        await update.message.reply_text(reply)
+    else:
+        await send_text(reply)
+
+
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _pending_ask, _pending_secret
+    global _pending_secret
     if not _is_allowed(update):
         return
     text = update.message.text
+    # Typed-only flows first: secrets, onboarding, and the /schedule wizard must never
+    # be fed from a voice transcription.
     if _pending_secret is not None:
         fut, kind, domain, task_id = _pending_secret
         _pending_secret = None
@@ -548,14 +569,38 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _sched_wizard is not None:
         await _wizard_step(text)
         return
-    if _pending_ask is not None and not _pending_ask.done():
-        fut, _pending_ask = _pending_ask, None
-        fut.set_result(text)
+    await _dispatch_text(text, update)
+
+
+async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Transcribe a Telegram voice message locally, then run it like a typed task."""
+    if not _is_allowed(update):
         return
-    text = _with_upload_context(text)
-    ahead = state.queue.qsize() + (1 if state.current is not None else 0)
-    task = state.new_task(text, origin="telegram")
-    await update.message.reply_text(f"Queued as task {task.id} ({ahead} ahead of it)")
+    v = update.message.voice
+    if v is None:
+        return
+    await update.message.reply_text("🎧 transcribing…")
+    tmp = os.path.join(tempfile.gettempdir(), f"pa_voice_{v.file_unique_id}.ogg")
+    try:
+        f = await context.bot.get_file(v.file_id)
+        await f.download_to_drive(tmp)
+        text = await voice.transcribe(tmp)
+    except Exception as e:
+        await update.message.reply_text(f"Couldn't handle that voice message: {e}")
+        return
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if text.startswith("Error"):
+        await update.message.reply_text(text)
+        return
+    if not text.strip():
+        await update.message.reply_text("Couldn't make out any speech — try again.")
+        return
+    await update.message.reply_text(f"🎙️ heard: {text}")
+    await _dispatch_text(text, update)
 
 
 async def _on_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -876,8 +921,10 @@ async def start_bridge() -> None:
     app.add_handler(CommandHandler("memory", _on_memory))
     app.add_handler(CommandHandler("forget", _on_forget))
     app.add_handler(CallbackQueryHandler(_on_callback, pattern=r"^cfm:"))
+    # Voice notes are transcribed and run as tasks; other media are saved as uploads.
+    app.add_handler(MessageHandler(filters.VOICE, _on_voice))
     app.add_handler(MessageHandler(
-        (filters.Document.ALL | filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.VOICE)
+        (filters.Document.ALL | filters.PHOTO | filters.AUDIO | filters.VIDEO)
         & ~filters.COMMAND,
         _on_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text))

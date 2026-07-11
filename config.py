@@ -94,3 +94,8 @@ REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
 REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "pocket-agent:v1 (by /u/change_me)")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+
+# --- Voice (Telegram voice messages -> local Whisper) ---
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")      # tiny|base|small|medium|large-v3
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")    # auto|cpu|cuda
+WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8")  # int8|float16|float32

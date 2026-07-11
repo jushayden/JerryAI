@@ -64,6 +64,7 @@ python test_tools_fs.py
 python test_tools_email.py    # offline — stubs the Gmail API, no account needed
 python test_tools_system.py   # offline — stubs the hardware calls
 python test_schedule.py       # offline — deterministic, no Telegram/network
+python test_voice.py          # offline — stubs Whisper, no model/network
 python test_remote_operator.py
 python test_vision.py
 python test_browser.py       # opens a visible Chromium window
@@ -73,7 +74,7 @@ Manual network/model checks: `python test_live_vlm.py` and, after completing any
 verification in co-drive Edge, `python test_real_site.py --co-drive`.
 
 Run these before opening a PR if you touched task state, Telegram, safety gates, email,
-system control, the scheduler, or browser tools.
+system control, the scheduler, voice, or browser tools.
 
 ## 7. Code conventions (keep it lean — hackathon project)
 
