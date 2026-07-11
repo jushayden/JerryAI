@@ -9,6 +9,7 @@ Drafting, marking read, and archiving are reversible and run without a gate.
 import asyncio
 import base64
 import html
+import json
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 
@@ -73,11 +74,24 @@ def _service():
 
     creds = None
     if TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        # Discard a token granted NARROWER scopes than we now need (e.g. an old read-only
+        # token from before send was added) so we re-consent once here, instead of the
+        # first send failing later with a 403 insufficient-permission error.
+        try:
+            granted = set(json.loads(TOKEN_PATH.read_text(encoding="utf-8")).get("scopes", []))
+        except Exception:
+            granted = set()
+        if set(SCOPES).issubset(granted):
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        else:
+            TOKEN_PATH.unlink(missing_ok=True)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception:
+                creds = None  # dead refresh token (e.g. Testing-mode 7-day expiry) -> re-consent
+        if not creds or not creds.valid:
             if not CREDS_PATH.exists():
                 raise RuntimeError(
                     f"Gmail is not set up: {CREDS_PATH} not found. "
