@@ -11,3 +11,4 @@ __pycache__/
 *.pyc
 .code-review-graph/
 .claude/settings.local.json
+client_secret_*.json
