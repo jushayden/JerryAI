@@ -14,6 +14,7 @@ import config
 import server
 import state
 import tools_browser
+import tools_email
 import tools_fs
 
 
@@ -58,7 +59,7 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         status_cb=status_cb,
         ask_user_cb=ask_cb,
         confirm_cb=bridge.confirm,
-        extra_tools=tools_browser.TOOLS,
+        extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS},
         history=history,
     )
     proof = _verify_touched()
