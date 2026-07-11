@@ -10,6 +10,13 @@ import config
 import state
 
 _runner: web.AppRunner | None = None
+_task_created_cb = None
+
+
+def configure(task_created_cb=None) -> None:
+    """Inject the Telegram notifier without introducing a bridge/server import cycle."""
+    global _task_created_cb
+    _task_created_cb = task_created_cb
 
 
 def _cors(resp: web.Response) -> web.Response:
@@ -38,10 +45,16 @@ async def _post_task(request: web.Request) -> web.Response:
     if not text:
         return _cors(web.json_response({"error": "empty prompt"}, status=400))
     url = str(body.get("url", "")).strip()
-    if url and not url.startswith("edge://"):
-        text = f"{text}\n(The user is currently looking at this page: {url} — start there if relevant.)"
-    task = state.new_task(text)
+    if url.startswith("edge://"):
+        url = ""
+    task = state.new_task(text, origin="badge", source_url=url or None)
     state.log_event({"event": "badge_task", "task": task.id})
+    if _task_created_cb is not None:
+        try:
+            await _task_created_cb(task)
+        except Exception as e:
+            state.log_event({"event": "badge_notify_failed", "task": task.id,
+                             "error": str(e)})
     return _cors(web.json_response({"id": task.id}))
 
 
@@ -58,6 +71,9 @@ async def _get_task(request: web.Request) -> web.Response:
         "needs": task.needs,
         "step": task.steps[-1] if task.steps else None,
         "steps": len(task.steps),
+        "origin": task.origin,
+        "sources": task.sources,
+        "artifacts": len(task.artifacts),
     }))
 
 
