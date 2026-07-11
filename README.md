@@ -18,6 +18,7 @@ phone (Telegram, any network) ⇄ Telegram servers ⇄ long polling ⇄ bridge.p
                                                   ├─ tools_fs.py       files, apps, screenshots, file-picker
                                                   ├─ tools_browser.py  Playwright — co-drive your real Edge
                                                   ├─ tools_email.py    Gmail read-only (scan_inbox)
+                                                  ├─ tools_system.py   volume/brightness/lock/media/power (gated)
                                                   ├─ gate.py           deterministic approval gate
                                                   └─ state.py          briefs + events.jsonl audit log
 ```
@@ -99,6 +100,18 @@ On your phone: `/start` once (registers you as owner), then just text tasks.
 - `/brief` · `/status` · `/cancel` · `/testconfirm`
 - `!task text` — pre-authorized (skips approval gates)
 
+## Control your PC from your phone
+
+Plain-language tasks drive the machine directly (`tools_system.py`): *"set the volume to 20%"*,
+*"mute"*, *"turn the brightness down"*, *"pause the music"*, *"lock my PC"*. **Power actions**
+— *"sleep the PC"*, *"shut down in 5 minutes"*, *"restart"* — are **gated**: you get an approval
+card on your phone first (say *"cancel the shutdown"* to abort a countdown). Pairs with the
+approval model and, if you have the scheduler, with timed jobs (e.g. sleep the PC at 11pm).
+
+> Windows-only. Volume needs `pycaw`, brightness needs `screen-brightness-control` (both
+> installed by `pip install -r requirements.txt` on Windows). External monitors need DDC/CI
+> support for brightness; if a call isn't supported it reports the error rather than failing silently.
+
 ## Co-drive your real browser (the app-filler demo)
 
 For real sites (job applications, signups) the agent works **inside your own Edge session**
@@ -142,5 +155,6 @@ and cooperative sites; weaker on bot-shielded ones).
 
 ## Tests
 
-`python test_state.py` · `python test_tools_fs.py` · `python test_browser.py`
-(browser test opens a visible Chromium window and drives the mock form end to end)
+`python test_state.py` · `python test_tools_fs.py` · `python test_tools_system.py` · `python test_browser.py`
+(system test is offline — stubs the hardware calls; browser test opens a visible Chromium
+window and drives the mock form end to end)

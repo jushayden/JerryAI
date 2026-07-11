@@ -61,17 +61,20 @@ On your phone: message your bot, `/start` once, then just send it tasks. See REA
 ```
 python test_state.py
 python test_tools_fs.py
-python test_browser.py   # opens a visible Chromium window
+python test_tools_system.py   # offline — stubs the hardware calls
+python test_browser.py        # opens a visible Chromium window
 ```
 
-Run these before opening a PR if you touched `state.py`, `tools_fs.py`, or `tools_browser.py`.
+Run these before opening a PR if you touched `state.py`, `tools_fs.py`, `tools_system.py`,
+or `tools_browser.py`.
 
 ## 7. Code conventions (keep it lean — hackathon project)
 
 - Plain module-level async functions. No classes beyond dataclasses, no frameworks
   beyond what's already in `requirements.txt`.
 - New PC/file actions go in `tools_fs.py` and must go through `_safe()` sandboxing.
-- New browser actions go in `tools_browser.py`.
+- New browser actions go in `tools_browser.py`; system control (volume/power/etc.) in
+  `tools_system.py` — power actions must go through the approval flow.
 - Anything irreversible (submit, delete, send, buy) must be routed through `gate.py`'s
   approval flow — don't let the model self-authorize destructive actions.
 - Keep tool results small (`config.TOOL_RESULT_MAX`) — the model's context is the

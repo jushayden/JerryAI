@@ -16,6 +16,7 @@ import state
 import tools_browser
 import tools_email
 import tools_fs
+import tools_system
 
 
 async def _final_screenshot() -> str | None:
@@ -53,13 +54,14 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         for t in recent)
 
     tools_browser.configure(confirm=bridge.confirm, preauth=task.preauthorized)
+    tools_system.configure(confirm=bridge.confirm, preauth=task.preauthorized)
     result = await agent.run_task(
         task.text,
         preauthorized=task.preauthorized,
         status_cb=status_cb,
         ask_user_cb=ask_cb,
         confirm_cb=bridge.confirm,
-        extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS},
+        extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS, **tools_system.TOOLS},
         history=history,
     )
     proof = _verify_touched()

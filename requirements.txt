@@ -4,3 +4,5 @@ playwright>=1.60
 pyyaml
 python-dotenv
 mss
+pycaw; sys_platform == "win32"
+screen-brightness-control; sys_platform == "win32"
