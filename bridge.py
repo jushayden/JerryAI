@@ -22,18 +22,21 @@ from telegram.ext import (
 
 import config
 import profile_store
+import schedule
 import state
 from state import TaskRecord
 
 # --- module state ---
 _app: Application | None = None
 _worker_task: asyncio.Task | None = None
+_scheduler_task: asyncio.Task | None = None
 _current_run_task: asyncio.Task | None = None  # wraps the running agent call (for /cancel)
 _allowed_chat_id: int = config.ALLOWED_CHAT_ID
 _pending_confirms: dict[str, asyncio.Future] = {}  # cid -> Future[bool]
 _pending_ask: asyncio.Future | None = None  # Future[str] resolved by next plain text
 _pending_secret: tuple[asyncio.Future, str, str, str | None] | None = None
 _pending_setup: asyncio.Future | None = None  # Future[str] resolved by the onboarding reply
+_sched_wizard: dict | None = None  # in-progress /schedule setup for the owner
 _status_cards: dict[str, dict] = {}  # task.id -> {msg_id, last, pending, flusher}
 
 
@@ -542,6 +545,9 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _pending_setup is not None:
         await _handle_setup_reply(update, text)
         return
+    if _sched_wizard is not None:
+        await _wizard_step(text)
+        return
     if _pending_ask is not None and not _pending_ask.done():
         fut, _pending_ask = _pending_ask, None
         fut.set_result(text)
@@ -614,9 +620,10 @@ async def _on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _pending_ask, _pending_secret, _pending_setup
+    global _pending_ask, _pending_secret, _pending_setup, _sched_wizard
     if not _is_allowed(update):
         return
+    _sched_wizard = None  # abort any in-progress /schedule setup
     for cid in list(_pending_confirms):
         fut = _pending_confirms.pop(cid, None)
         if fut is not None and not fut.done():
@@ -682,6 +689,87 @@ async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(f"Got it — I'll remember {key} = {value}.")
     except Exception as e:
         await update.message.reply_text(f"Couldn't save that: {e}")
+
+
+# --- scheduler ---
+_WHEN_HELP = (
+    "When should it run? Examples:\n"
+    "• daily 08:00\n"
+    "• weekdays 09:30\n"
+    "• weekly mon 07:00\n"
+    "• every 2h   /   every 30m\n"
+    "• once 2026-07-12 14:00"
+)
+
+
+def _enqueue_scheduled(text: str, job_id: str) -> None:
+    """Enqueue a due scheduled job as a normal task (high-impact actions gate as usual)."""
+    task = state.new_task(text)
+    if _app is not None and _allowed_chat_id != 0:
+        asyncio.create_task(send_text(f"⏰ Scheduled {job_id} started: {task.text[:60]}"))
+
+
+async def _on_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _sched_wizard
+    if not _is_allowed(update):
+        return
+    _sched_wizard = {"step": "text", "text": None, "spec": None}
+    await update.message.reply_text(
+        "New scheduled task. What should I do each time? Send the task text.\n"
+        "(/cancel to abort)")
+
+
+async def _wizard_step(text: str) -> None:
+    """Advance the /schedule wizard with the owner's latest message."""
+    global _sched_wizard
+    w = _sched_wizard
+    if w is None:
+        return
+    if w["step"] == "text":
+        if not text.strip():
+            await send_text("Send the task text — what should I do each time?")
+            return
+        w["text"], w["step"] = text.strip(), "spec"
+        await send_text(_WHEN_HELP)
+    elif w["step"] == "spec":
+        try:
+            job = schedule.add_job(w["text"], " ".join(text.split()))
+        except ValueError as e:
+            await send_text(f"{e}\n\n{_WHEN_HELP}")
+            return
+        _sched_wizard = None
+        await send_text(
+            f"Scheduled ✓ [{job['id']}] \"{job['text'][:60]}\"\n"
+            f"{schedule.describe(job)} · high-impact actions still ask on your phone\n"
+            f"Next run: {schedule.fmt_next(job)}\n"
+            f"/schedules to view · /unschedule {job['id']} to remove")
+
+
+async def _on_schedules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    js = schedule.jobs()
+    if not js:
+        await update.message.reply_text("No scheduled tasks. /schedule to add one.")
+        return
+    lines = ["Scheduled tasks:"]
+    for j in js:
+        lines.append(f"[{j['id']}] {j['text'][:50]}\n   {schedule.describe(j)} · "
+                     f"next {schedule.fmt_next(j)}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def _on_unschedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    jid = (update.message.text or "").partition(" ")[2].strip()
+    if not jid:
+        await update.message.reply_text("Usage: /unschedule <id>  (see /schedules)")
+        return
+    if schedule.remove_job(jid):
+        await update.message.reply_text(f"Removed {jid}.")
+    else:
+        await update.message.reply_text(f"No scheduled task with id {jid}.")
 
 
 async def _on_testconfirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -765,8 +853,8 @@ async def _worker() -> None:
 
 # --- lifecycle ---
 async def start_bridge() -> None:
-    """Build the PTB app, register handlers, start polling, spawn the worker."""
-    global _app, _worker_task
+    """Build the PTB app, register handlers, start polling, spawn the worker + scheduler."""
+    global _app, _worker_task, _scheduler_task
     if not config.BOT_TOKEN:
         raise RuntimeError(
             "BOT_TOKEN is empty — create a bot with @BotFather and put "
@@ -779,6 +867,9 @@ async def start_bridge() -> None:
     app.add_handler(CommandHandler("inbox", _on_inbox))
     app.add_handler(CommandHandler("news", _on_news))
     app.add_handler(CommandHandler("remember", _on_remember))
+    app.add_handler(CommandHandler("schedule", _on_schedule))
+    app.add_handler(CommandHandler("schedules", _on_schedules))
+    app.add_handler(CommandHandler("unschedule", _on_unschedule))
     app.add_handler(CommandHandler("testconfirm", _on_testconfirm))
     app.add_handler(CommandHandler("setup", _on_setup))
     app.add_handler(CommandHandler("skip", _on_skip))
@@ -795,12 +886,17 @@ async def start_bridge() -> None:
     await app.updater.start_polling()
     _app = app
     _worker_task = asyncio.create_task(_worker())
+    schedule.load()
+    _scheduler_task = asyncio.create_task(
+        schedule.run(_enqueue_scheduled,
+                     owner_ready=lambda: _allowed_chat_id != 0,
+                     log=state.log_event))
     state.log_event({"event": "bridge_started"})
 
 
 async def stop_bridge() -> None:
-    """Graceful shutdown: stop polling, stop app, cancel the worker."""
-    global _app, _worker_task, _current_run_task
+    """Graceful shutdown: stop polling, stop app, cancel the worker + scheduler."""
+    global _app, _worker_task, _scheduler_task, _current_run_task
     if _current_run_task is not None and not _current_run_task.done():
         _current_run_task.cancel()
     if _app is not None:
@@ -812,14 +908,16 @@ async def stop_bridge() -> None:
             await _app.shutdown()
         except Exception as e:
             state.log_event({"event": "shutdown_error", "error": str(e)})
-    if _worker_task is not None:
-        _worker_task.cancel()
-        try:
-            await _worker_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    for t in (_worker_task, _scheduler_task):
+        if t is not None:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
     _app = None
     _worker_task = None
+    _scheduler_task = None
     clear_task_secrets(None)
     state.log_event({"event": "bridge_stopped"})
 

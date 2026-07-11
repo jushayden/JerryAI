@@ -111,6 +111,8 @@ On your phone: `/start` once (registers you as owner), then just text tasks.
 - `/news` — briefing over your `interests:` list (no setup needed beyond `profile.yaml`)
 - Just ask in plain language for Reddit/YouTube: "search reddit for X", "what's hot in r/LocalLLaMA", "find youtube videos about Y" (needs [SOCIAL_SETUP.md](SOCIAL_SETUP.md) keys)
 - `/remember key: value` — teach the agent a fact to reuse (e.g. `/remember work authorization: US citizen`)
+- `/schedule` — set up a recurring task (interactive: it asks *what* and *when*).
+  `/schedules` to list, `/unschedule <id>` to remove. See below.
 - `/brief` · `/status` · `/cancel` · `/testconfirm`
 
 ## Control your PC from your phone
@@ -124,6 +126,22 @@ approval model and, if you have the scheduler, with timed jobs (e.g. sleep the P
 > Windows-only. Volume needs `pycaw`, brightness needs `screen-brightness-control` (both
 > installed by `pip install -r requirements.txt` on Windows). External monitors need DDC/CI
 > support for brightness; if a call isn't supported it reports the error rather than failing silently.
+
+### Scheduled tasks
+
+`/schedule` walks you through building a recurring job — it prompts for the task text, then
+the timing:
+
+```
+When should it run? Examples:
+  daily 08:00 · weekdays 09:30 · weekly mon 07:00 · every 2h · every 30m · once 2026-07-12 14:00
+```
+
+Due jobs are enqueued through the normal queue → agent → phone-report pipeline and still hit
+the approval gate for high-impact actions (there is no auto-run bypass — same safety model as
+typed tasks). Jobs persist to `schedules.json` across restarts.
+Example: schedule *"scan my inbox from the last 24h and flag what matters"* for `weekdays 08:00`
+to get a briefing on your phone every workday morning.
 
 ## Co-drive your real browser (the app-filler demo)
 
@@ -182,11 +200,11 @@ summary, screenshot, generated data/download artifacts, and a timestamped audit 
 ## Tests
 
 `python test_state.py` · `python test_tools_fs.py` · `python test_tools_email.py` ·
-`python test_tools_system.py` · `python test_remote_operator.py` · `python test_vision.py` ·
-`python test_browser.py`
+`python test_tools_system.py` · `python test_schedule.py` · `python test_remote_operator.py` ·
+`python test_vision.py` · `python test_browser.py`
 (email test is offline — stubs the Gmail API, no account needed; system test is offline —
-stubs the hardware calls; browser test opens a visible Chromium window and drives the mock
-form end to end)
+stubs the hardware calls; schedule test is offline — deterministic, no Telegram/network;
+browser test opens a visible Chromium window and drives the mock form end to end)
 
 After pulling the vision model, run `python test_vision.py --real` for the local-model smoke test.
 Run `python test_live_vlm.py` for the 30B VLM check against a complex live Microsoft page.
