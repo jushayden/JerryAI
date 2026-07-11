@@ -6,10 +6,13 @@ recoverable). Sending, replying, and trashing are gated: the agent asks you to a
 your phone first. It needs a Google OAuth "Desktop app" client. Works with a personal
 @gmail.com account — no verification, no billing.
 
-## 0. Install the libraries (if not already done)
+## 0. Install the libraries
+
+These ship in `requirements.txt`, so `pip install -r requirements.txt` already covers them.
+If you set the project up before they were added, run:
 
 ```
-pip install --user google-api-python-client google-auth-oauthlib
+pip install google-api-python-client google-auth-oauthlib
 ```
 
 ## 1. Create a Google Cloud project
