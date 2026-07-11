@@ -17,6 +17,7 @@ import tools_browser
 import tools_email
 import tools_fs
 import tools_social
+import tools_system
 
 
 async def _final_screenshot() -> str | None:
@@ -70,8 +71,9 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         secret_resolver=bridge.consume_secret,
     )
     # No preauth bypass any more (the operator build removed `!`); email send/reply/trash
-    # always gate through the phone, matching the browser gate.
+    # and system power actions always gate through the phone, matching the browser gate.
     tools_email.configure(confirm=bridge.confirm)
+    tools_system.configure(confirm=bridge.confirm)
     prompt = task.text
     if task.source_url:
         prompt += (
@@ -85,7 +87,8 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         confirm_cb=bridge.confirm,
         request_secret_cb=secret_cb,
         audit_cb=audit_cb,
-        extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS, **tools_social.TOOLS},
+        extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS,
+                     **tools_social.TOOLS, **tools_system.TOOLS},
         history=history,
     )
     proof = _verify_touched()

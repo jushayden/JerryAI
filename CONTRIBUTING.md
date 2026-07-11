@@ -61,7 +61,8 @@ On your phone: message your bot, `/start` once, then just send it tasks. See REA
 ```
 python test_state.py
 python test_tools_fs.py
-python test_tools_email.py   # offline — stubs the Gmail API, no account needed
+python test_tools_email.py    # offline — stubs the Gmail API, no account needed
+python test_tools_system.py   # offline — stubs the hardware calls
 python test_remote_operator.py
 python test_vision.py
 python test_browser.py       # opens a visible Chromium window
@@ -70,14 +71,16 @@ python test_browser.py       # opens a visible Chromium window
 Manual network/model checks: `python test_live_vlm.py` and, after completing any site
 verification in co-drive Edge, `python test_real_site.py --co-drive`.
 
-Run these before opening a PR if you touched task state, Telegram, safety gates, email, or browser tools.
+Run these before opening a PR if you touched task state, Telegram, safety gates, email,
+system control, or browser tools.
 
 ## 7. Code conventions (keep it lean — hackathon project)
 
 - Plain module-level async functions. No classes beyond dataclasses, no frameworks
   beyond what's already in `requirements.txt`.
 - New PC/file actions go in `tools_fs.py` and must go through `_safe()` sandboxing.
-- New browser actions go in `tools_browser.py`.
+- New browser actions go in `tools_browser.py`; system control (volume/power/etc.) in
+  `tools_system.py` — power actions must go through the approval flow.
 - Anything irreversible (submit, delete, send, buy) must be routed through `gate.py`'s
   approval flow — don't let the model self-authorize destructive actions.
 - Keep tool results small (`config.TOOL_RESULT_MAX`) — the model's context is the
