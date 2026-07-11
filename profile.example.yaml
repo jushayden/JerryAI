@@ -17,3 +17,9 @@ resume_path: C:\Users\you\Documents\resume.pdf
 bio: >
   CS student building local-first AI agents. Interested in on-device LLMs,
   automation, and human-in-the-loop safety.
+# Used by /news (DuckDuckGo briefing) and as defaults for reddit_feed if you ask
+# for "my feed" without naming subreddits:
+interests:
+  - local LLMs and agent tooling
+  - Formula 1
+  - indie game dev

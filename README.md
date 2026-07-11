@@ -62,12 +62,17 @@ choose, and gates every submit. Files: `tools_browser.py`, `tools_fs.py`, `agent
   MSAL device-code auth), same `scan_inbox`-shaped tool + `OUTLOOK_SETUP.md`, folded into
   `/inbox`. Heads-up: the Azure app registration is the time risk — start it early.
 
-### Track C — Social + news briefing (read-only)  (⛏ teammate)
+### Track C — Social + news briefing (read-only)  (Reddit/YouTube/News ✅ wired)
+- **Reddit + YouTube** (`tools_social.py`): official **read-only** APIs — `reddit_search`,
+  `reddit_feed`, `youtube_search`. No OAuth, just an API key/app secret each — follow
+  **[SOCIAL_SETUP.md](SOCIAL_SETUP.md)**. This is the reference for platforms with a free
+  read API, same integration contract as `tools_email.py`.
 - **News**: a `/news` command — no new tool, just a canned task using the existing browser
   tools (DuckDuckGo HTML → read top sources) over an `interests:` list in your profile.
-- **Social reading**: co-drive only — you open your X/IG/TikTok/FB feed in Edge, hit the J
+- **Social reading (X/IG/TikTok/FB)**: co-drive only — you open the feed in Edge, hit the J
   badge with "summarize what's new", the agent reads the rendered page. Stops if a platform
-  blocks it.
+  blocks it. (No free official read API for these, so no dedicated tool — this is the
+  scoped, deliberate design, not a gap.)
 - **Posting is OUT OF SCOPE, all platforms** (researched Jul 2026): X has no free tier
   (pay-per-use credits only); Instagram/Facebook need 2–4-week app review; TikTok unaudited
   forces posts to private. If a real posting API becomes reachable, it must use a fresh
@@ -84,6 +89,7 @@ choose, and gates every submit. Files: `tools_browser.py`, `tools_fs.py`, `agent
 4. `copy profile.example.yaml profile.yaml`, fill in your info (gitignored). Add
    `resume_path:` and `interests:` if you want uploads and news.
 5. *(Optional, for `/inbox`)* Gmail OAuth via [GMAIL_SETUP.md](GMAIL_SETUP.md).
+6. *(Optional, for Reddit/YouTube search)* [SOCIAL_SETUP.md](SOCIAL_SETUP.md).
 
 ## Run
 
@@ -95,6 +101,8 @@ Starts the mock-form server (:8000), warms the model, starts the bot + J-badge e
 On your phone: `/start` once (registers you as owner), then just text tasks.
 
 - `/inbox` — email briefing (needs Gmail OAuth)
+- `/news` — briefing over your `interests:` list (no setup needed beyond `profile.yaml`)
+- Just ask in plain language for Reddit/YouTube: "search reddit for X", "what's hot in r/LocalLLaMA", "find youtube videos about Y" (needs [SOCIAL_SETUP.md](SOCIAL_SETUP.md) keys)
 - `/remember key: value` — teach the agent a fact to reuse (e.g. `/remember work authorization: US citizen`)
 - `/brief` · `/status` · `/cancel` · `/testconfirm`
 - `!task text` — pre-authorized (skips approval gates)

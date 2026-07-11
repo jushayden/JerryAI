@@ -16,6 +16,7 @@ import state
 import tools_browser
 import tools_email
 import tools_fs
+import tools_social
 
 
 async def _final_screenshot() -> str | None:
@@ -59,7 +60,7 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
         status_cb=status_cb,
         ask_user_cb=ask_cb,
         confirm_cb=bridge.confirm,
-        extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS},
+        extra_tools={**tools_browser.TOOLS, **tools_email.TOOLS, **tools_social.TOOLS},
         history=history,
     )
     proof = _verify_touched()

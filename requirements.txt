@@ -4,3 +4,5 @@ playwright>=1.60
 pyyaml
 python-dotenv
 mss
+praw>=7.8
+google-api-python-client>=2.160
