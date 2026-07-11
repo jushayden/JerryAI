@@ -256,25 +256,50 @@ _EXTRACT_JS = """
   const isFormField = (el) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName);
   const textOf = (el) => ((el.innerText || el.textContent || '')).trim().replace(/\\s+/g, ' ').slice(0, 80);
 
-  const cand = new Set();
-  document.querySelectorAll(
-    'input:not([type=hidden]), select, textarea, button, a[href], [role=button], [onclick]'
-  ).forEach((el) => cand.add(el));
-  document.querySelectorAll('div, span').forEach((el) => {
-    try { if (getComputedStyle(el).cursor === 'pointer') cand.add(el); } catch (e) {}
-  });
+  // Search the document AND any open shadow roots — web-component controls live inside shadow
+  // DOM and are invisible to a plain document.querySelectorAll (a common "missing element" cause).
+  const roots = [document];
+  (function collectRoots(node, depth) {
+    if (depth > 6) return;
+    let all;
+    try { all = node.querySelectorAll('*'); } catch (e) { return; }
+    for (const el of all) {
+      if (el.shadowRoot) { roots.push(el.shadowRoot); collectRoots(el.shadowRoot, depth + 1); }
+    }
+  })(document, 0);
 
+  const INTERACTIVE = 'input:not([type=hidden]), select, textarea, button, a[href], a[onclick], ' +
+    'summary, label, [role=button], [role=link], [role=menuitem], [role=menuitemcheckbox], ' +
+    '[role=menuitemradio], [role=tab], [role=option], [role=checkbox], [role=radio], ' +
+    '[role=switch], [role=combobox], [onclick], [tabindex]:not([tabindex="-1"]), ' +
+    '[contenteditable=""], [contenteditable="true"]';
+  const cand = new Set();
+  for (const root of roots) {
+    try { root.querySelectorAll(INTERACTIVE).forEach((el) => cand.add(el)); } catch (e) {}
+    try {
+      root.querySelectorAll('div, span, li, td, th, a, label, p, i, img').forEach((el) => {
+        try { if (getComputedStyle(el).cursor === 'pointer') cand.add(el); } catch (e) {}
+      });
+    } catch (e) {}
+  }
+
+  // A "strong" control is a real interactive element; a "weak" one qualified only via
+  // cursor:pointer (a generic wrapper). Dedupe ONLY weak wrappers nested inside another
+  // candidate — strong controls are always kept, so a real button inside a clickable card is
+  // no longer swallowed by the card (a common cause of "it never clicked the button").
+  const isStrong = (el) => isFormField(el) ||
+    ['BUTTON', 'A', 'SUMMARY', 'LABEL'].includes(el.tagName) ||
+    el.hasAttribute('role') || el.hasAttribute('onclick');
   const kept = [];
   for (const el of cand) {
     // Hidden radios/checkboxes often have a visible associated label (Tesla/React design
     // systems). Keep form fields so Jerry can operate their visible label safely.
     if (!isVisible(el) && !isFormField(el)) continue;
     if (el.disabled) continue;
-    if (!isFormField(el)) {
-      // dedupe nested clickables — keep the outermost one
+    if (!isStrong(el)) {
       let p = el.parentElement, nested = false;
       while (p) {
-        if (cand.has(p) && !isFormField(p)) { nested = true; break; }
+        if (cand.has(p)) { nested = true; break; }
         p = p.parentElement;
       }
       if (nested) continue;
@@ -375,7 +400,7 @@ async def _extract():
 def _digest(elements, page_title, url) -> str:
     """One line per element, capped at ~TOOL_RESULT_MAX*1.5 chars."""
     lines = [f"Page: {page_title} — {url}"]
-    limit = int(config.TOOL_RESULT_MAX * 1.5)
+    limit = int(config.TOOL_RESULT_MAX * 3)
     used = len(lines[0])
     shown = 0
     for el in elements:
@@ -1153,7 +1178,7 @@ async def _add_vision_overlay(page) -> list[dict]:
           root.id = 'jerry-vision-overlay';
           root.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none;';
           const out = [];
-          for (const el of Array.from(document.querySelectorAll('[data-agent-id]')).slice(0, 100)) {
+          for (const el of Array.from(document.querySelectorAll('[data-agent-id]')).slice(0, 200)) {
             const r = el.getBoundingClientRect();
             if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.right < 0 ||
                 r.top > innerHeight || r.left > innerWidth) continue;
@@ -1216,7 +1241,7 @@ async def visual_inspect(args: dict) -> str:
             "and their badges are element IDs; return that element_id when the correct target is "
             "marked, otherwise return an empty string. Coordinates must be viewport pixels. "
             f"Viewport: {viewport['width']}x{viewport['height']}. Target: {description}. "
-            f"Visible DOM candidates: {json.dumps(candidates[:50], ensure_ascii=False)}"
+            f"Visible DOM candidates: {json.dumps(candidates[:80], ensure_ascii=False)}"
         )
         try:
             response = await client.chat(
