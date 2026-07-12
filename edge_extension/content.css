@@ -1,7 +1,7 @@
 #pocket-agent-badge {
   position: fixed;
   bottom: 24px;
-  right: 24px;
+  left: 24px;
   z-index: 2147483647;
   width: 48px;
   height: 48px;
@@ -30,7 +30,7 @@
 #pocket-agent-panel {
   position: fixed;
   bottom: 84px;
-  right: 24px;
+  left: 24px;
   z-index: 2147483647;
   width: 320px;
   background: #1e1b2e;
@@ -61,9 +61,15 @@
   box-sizing: border-box;
 }
 #pocket-agent-panel textarea:focus { outline: 2px solid #8a6bff; }
-#pocket-agent-send {
+.pa-actions {
   margin-top: 8px;
-  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#pocket-agent-send {
+  margin-left: auto;
+  min-width: 92px;
   border: 0;
   border-radius: 8px;
   padding: 8px;
@@ -73,6 +79,66 @@
   cursor: pointer;
 }
 #pocket-agent-send:disabled { opacity: .5; cursor: default; }
+#pocket-agent-stop {
+  border: 1px solid #d25a68;
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: #562732;
+  color: #ffdce1;
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+#pocket-agent-stop:hover { background: #71303d; }
+#pocket-agent-stop:disabled { opacity: .5; cursor: default; }
+#pocket-agent-stop[hidden] { display: none; }
+#pocket-agent-add {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border: 1px solid #625a88;
+  border-radius: 50%;
+  background: #302b4b;
+  color: #fff;
+  font: 500 23px/27px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+#pocket-agent-add:hover { background: #403862; border-color: #8a6bff; }
+#pocket-agent-add:disabled { opacity: .5; cursor: default; }
+.pa-attach-label { color: #b9b3d9; font-size: 12px; }
+#pocket-agent-attachments:empty { display: none; }
+#pocket-agent-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.pa-file-chip {
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid #514a72;
+  border-radius: 999px;
+  background: #2a2740;
+  color: #ddd8f4;
+  font-size: 11px;
+}
+.pa-file-chip span {
+  max-width: 225px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pa-file-chip button {
+  border: 0;
+  background: transparent;
+  color: #aaa2cc;
+  cursor: pointer;
+  font: 16px/14px "Segoe UI", sans-serif;
+  padding: 0 2px;
+}
+.pa-file-chip button:hover { color: #fff; }
 #pocket-agent-status {
   margin-top: 8px;
   min-height: 18px;

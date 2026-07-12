@@ -57,17 +57,37 @@ def _volume_endpoint():
     return cast(interface, POINTER(IAudioEndpointVolume))
 
 
+def _volume_call(operation):
+    """Run one endpoint operation and release worker-thread COM deterministically."""
+    endpoint = None
+    try:
+        endpoint = _volume_endpoint()
+        return operation(endpoint)
+    finally:
+        try:
+            endpoint = None
+            import gc
+            gc.collect()
+            import comtypes
+            comtypes.CoUninitialize()
+        except Exception:
+            pass
+
+
 def _set_volume_sync(level: int) -> str:
-    vol = _volume_endpoint()
-    vol.SetMasterVolumeLevelScalar(level / 100.0, None)
-    if level > 0:
-        vol.SetMute(0, None)  # raising volume implies un-mute
-    return f"Volume set to {round(vol.GetMasterVolumeLevelScalar() * 100)}%."
+    def apply(vol):
+        vol.SetMasterVolumeLevelScalar(level / 100.0, None)
+        if level > 0:
+            vol.SetMute(0, None)  # raising volume implies un-mute
+        return f"Volume set to {round(vol.GetMasterVolumeLevelScalar() * 100)}%."
+    return _volume_call(apply)
 
 
 def _set_mute_sync(on: bool) -> str:
-    _volume_endpoint().SetMute(1 if on else 0, None)
-    return "Muted." if on else "Unmuted."
+    def apply(vol):
+        vol.SetMute(1 if on else 0, None)
+        return "Muted." if on else "Unmuted."
+    return _volume_call(apply)
 
 
 def _set_brightness_sync(level: int) -> str:
@@ -119,10 +139,11 @@ def _power_sync(action: str, delay: int) -> str:
 def _status_sync() -> str:
     lines = []
     try:
-        vol = _volume_endpoint()
-        pct = round(vol.GetMasterVolumeLevelScalar() * 100)
-        muted = " (muted)" if vol.GetMute() else ""
-        lines.append(f"Volume: {pct}%{muted}")
+        def read_volume(vol):
+            pct = round(vol.GetMasterVolumeLevelScalar() * 100)
+            muted = " (muted)" if vol.GetMute() else ""
+            return f"Volume: {pct}%{muted}"
+        lines.append(_volume_call(read_volume))
     except Exception as e:
         lines.append(f"Volume: unavailable ({e})")
     try:

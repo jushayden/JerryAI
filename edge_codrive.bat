@@ -1,10 +1,10 @@
 @echo off
-REM Pocket Agent co-drive launcher.
+REM Jerry Pocket Agent co-drive launcher.
 REM Relaunches YOUR real Edge with a debug port so the agent can act inside your
 REM persistent Jerry Edge profile (it never spoofs or bypasses checks). Modern Edge
 REM ignores remote-debugging flags on the default profile, so a dedicated profile is required.
 echo.
-echo  Pocket Agent co-drive setup
+echo  Jerry Pocket Agent co-drive setup
 echo  ---------------------------
 echo  This will CLOSE Microsoft Edge and reopen it with co-drive enabled.
 echo  Jerry uses a persistent co-drive profile under LocalAppData.

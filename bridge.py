@@ -10,8 +10,15 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputFile,
+    LinkPreviewOptions,
+    Update,
+)
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -81,22 +88,94 @@ async def _retry(fn, *args, **kwargs):
             await asyncio.sleep(1 + attempt)
 
 
-async def send_text(text: str) -> None:
-    """Send plain text to the owner chat."""
+def _clean_chat_text(text: str) -> str:
+    """Turn model-ish Markdown into restrained, readable Telegram text."""
+    text = state.redact_text(str(text or "")).strip()
+    text = re.sub(r"^\s*(?:\[?DONE\]?|RESULT)\s*[:\-]\s*", "", text, flags=re.I)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r"\1 (\2)", text)
+    text = re.sub(r"(?m)^\s*[-*]\s+", "• ", text)
+    text = text.replace("**", "").replace("__", "").replace(chr(96), "")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _message_chunks(text: str, limit: int = 3900) -> list[str]:
+    """Split long answers at paragraph/line boundaries instead of truncating."""
+    text = _clean_chat_text(text)
+    if not text:
+        return []
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        cut = remaining.rfind("\n\n", 0, limit + 1)
+        if cut < limit // 2:
+            cut = remaining.rfind("\n", 0, limit + 1)
+        if cut < limit // 2:
+            cut = remaining.rfind(" ", 0, limit + 1)
+        if cut <= 0:
+            cut = limit
+        chunks.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+async def send_text(text: str):
+    """Send clean text to the owner chat, preserving long answers in chunks."""
     if _app is None or _allowed_chat_id == 0:
         state.log_event({"event": "send_skipped", "reason": "no app or no owner chat"})
+        return None
+    last = None
+    for chunk in _message_chunks(text):
+        last = await _retry(
+            _app.bot.send_message,
+            chat_id=_allowed_chat_id,
+            text=chunk,
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+    return last
+
+
+def _blank_status_card() -> dict:
+    return {"msg_id": None, "last": 0.0, "pending": None, "flusher": None,
+            "ticker": None, "spin": 0, "seeding": False}
+
+
+async def _seed_status_card(
+    task: TaskRecord,
+    text: str,
+    *,
+    reply_message=None,
+) -> None:
+    """Create the one message that will become Jerry's live working indicator."""
+    if _app is None or _allowed_chat_id == 0:
         return
-    await _retry(_app.bot.send_message, chat_id=_allowed_chat_id,
-                 text=state.redact_text(text))
+    card = _status_cards.setdefault(task.id, _blank_status_card())
+    if card.get("msg_id") is not None:
+        return
+    card["seeding"] = True
+    try:
+        if reply_message is not None:
+            msg = await reply_message.reply_text(_clean_chat_text(text))
+        else:
+            msg = await _app.bot.send_message(
+                chat_id=_allowed_chat_id, text=_clean_chat_text(text))
+        card["msg_id"] = msg.message_id
+        card["last"] = time.monotonic()
+        task.status_msg_id = msg.message_id
+        if task.status == "running" and card.get("ticker") is None:
+            card["ticker"] = asyncio.create_task(_ticker(task, card))
+    except Exception as e:
+        state.log_event({"event": "send_failed", "task": task.id, "error": str(e)})
+    finally:
+        card["seeding"] = False
 
 
 async def notify_task_accepted(task: TaskRecord) -> None:
     """Notify the phone when a task originated outside Telegram (the J badge)."""
-    await send_text(
-        f"J badge task {task.id} accepted.\n"
-        f"Page: {task.source_url or '(not provided)'}\n"
-        f"Request: {task.text}"
-    )
+    await _seed_status_card(task, "Working on the page you sent…")
 
 
 def _expire_secrets() -> None:
@@ -122,8 +201,9 @@ async def request_secret(
     _pending_secret = (fut, kind, domain, task_id)
     where = f" for {domain}" if domain else ""
     await send_text(
-        f"🔐 {question}{where}\n"
-        "Reply with the value. It will be held in memory for one use and redacted from Jerry's logs."
+        f"I need a private value{where}.\n\n{question}\n\n"
+        "Reply here. Jerry will use it once, keep it out of model messages and logs, "
+        "and expire it after five minutes. Your reply will remain in this Telegram chat."
     )
     try:
         return await asyncio.wait_for(fut, config.CONFIRM_TIMEOUT)
@@ -153,7 +233,7 @@ def clear_task_secrets(task_id: str | None) -> None:
 
 
 # --- confirm / ask ---
-async def confirm(summary: str) -> bool:
+async def _confirm_legacy(summary: str) -> bool:
     """Ask the owner to approve via inline keyboard. Timeout or /cancel -> False."""
     if _app is None or _allowed_chat_id == 0:
         return False
@@ -192,12 +272,104 @@ async def confirm(summary: str) -> bool:
     return approved
 
 
-async def ask_user(question: str) -> str:
+def _compact_approval(summary: str) -> str:
+    text = _clean_chat_text(summary)
+    replacements = {
+        "High-impact action:": "Action:",
+        "Page/domain:": "Site:",
+        "Important details:": "Key details",
+        "Form contains:": "Included information",
+    }
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        for old, new in replacements.items():
+            if line.startswith(old):
+                line = new + line[len(old):]
+                break
+        if raw.startswith("  ") and not line.startswith("•"):
+            line = f"• {line}"
+        key = line.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(line)
+    if len(lines) > 24:
+        hidden = len(lines) - 22
+        lines = lines[:22] + [f"• {hidden} additional completed fields"]
+    while len("\n".join(lines)) > 2800 and len(lines) > 5:
+        lines.pop(-2)
+    return "\n".join(lines) or "Review the requested action."
+
+
+async def confirm(summary: str) -> bool:
+    """Show one concise, information-preserving approval card."""
+    if _app is None or _allowed_chat_id == 0:
+        return False
+    cid = uuid.uuid4().hex[:8]
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    _pending_confirms[cid] = fut
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Approve", callback_data=f"cfm:{cid}:y"),
+        InlineKeyboardButton("Don't approve", callback_data=f"cfm:{cid}:n"),
+    ]])
+    details = _compact_approval(state.redact_text(summary))
+    if state.current is not None:
+        state.audit_event(state.current, "approval", "requested", {"summary": details})
+    msg = await _retry(
+        _app.bot.send_message,
+        chat_id=_allowed_chat_id,
+        text=f"Approve this action?\n\n{details}\n\nNothing will happen unless you approve.",
+        reply_markup=kb,
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
+    )
+    if msg is None:
+        _pending_confirms.pop(cid, None)
+        return False
+    state.log_event({"event": "confirm_sent", "cid": cid, "summary": details[:120]})
+    try:
+        approved = await asyncio.wait_for(fut, config.CONFIRM_TIMEOUT)
+    except asyncio.TimeoutError:
+        _pending_confirms.pop(cid, None)
+        try:
+            await _app.bot.edit_message_text(
+                chat_id=_allowed_chat_id,
+                message_id=msg.message_id,
+                text="Approval expired. Nothing was done.",
+            )
+        except Exception as e:
+            state.log_event({"event": "edit_failed", "error": str(e)})
+        return False
+    if state.current is not None:
+        state.audit_event(state.current, "approval", "answered",
+                          {"approved": approved}, ok=approved)
+    return approved
+
+
+async def _ask_user_legacy(question: str) -> str:
     """Send a question; the next plain text message is the answer. Timeout raises."""
     global _pending_ask
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     _pending_ask = fut
     await send_text(f"❓ {question}")
+    if state.current is not None:
+        state.audit_event(state.current, "user_input", "question", {"question": question})
+    try:
+        return await asyncio.wait_for(fut, config.CONFIRM_TIMEOUT)
+    finally:
+        if _pending_ask is fut:
+            _pending_ask = None
+
+
+async def ask_user(question: str) -> str:
+    """Ask for one missing detail in a natural conversational message."""
+    global _pending_ask
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    _pending_ask = fut
+    await send_text(f"I need one detail:\n\n{question}")
     if state.current is not None:
         state.audit_event(state.current, "user_input", "question", {"question": question})
     try:
@@ -237,7 +409,7 @@ _FRIENDLY_STEPS = {
 }
 
 
-def _friendly_step(s: str) -> str:
+def _friendly_step_legacy(s: str) -> str:
     if s.startswith("web_agent step"):
         return f"🧭 {s[10:].strip()}"
     name, sep, rest = s.partition("(")
@@ -249,36 +421,79 @@ def _friendly_step(s: str) -> str:
     return f"{label} {hint}".strip()
 
 
-def _render_status(task: TaskRecord, frame: int = 0) -> str:
+def _render_status_legacy(task: TaskRecord, frame: int = 0) -> str:
     spin = _SPIN[frame % len(_SPIN)]
     lines = [f"{spin} On it — {state.redact_text(task.text)[:200]}"]
     lines += [f"→ {_friendly_step(s)}" for s in task.steps[-6:]]
     return "\n".join(lines)
 
 
+def _friendly_step(s: str) -> str:
+    """Hide tool names, ids, arguments, and personal values from live status."""
+    name = s.partition("(")[0].strip()
+    labels = {
+        "browser_goto": "Opening the page",
+        "read_page": "Reading the page",
+        "extract_form_fields": "Checking the form",
+        "find_elements": "Finding the right control",
+        "fill_field": "Filling in the form",
+        "choose_option": "Selecting an option",
+        "select_option": "Selecting an option",
+        "autofill_application": "Filling the application",
+        "upload_file": "Attaching the file",
+        "pick_file": "Finding the file",
+        "click_element": "Using the page",
+        "scroll_page": "Moving through the page",
+        "visual_inspect": "Looking at the page",
+        "visual_click": "Using a visual control",
+        "scrape_page": "Collecting the information",
+        "download_element": "Downloading the file",
+        "screenshot_page": "Capturing the final page",
+        "list_tabs": "Checking the open tabs",
+        "switch_tab": "Switching tabs",
+        "new_tab": "Opening another tab",
+        "close_tab": "Closing a task tab",
+        "scan_inbox": "Reading your inbox",
+        "send_email": "Sending the email",
+        "reply_email": "Replying to the email",
+        "create_draft": "Drafting the email",
+        "youtube_search": "Searching YouTube",
+        "reddit_search": "Searching Reddit",
+        "read_profile": "Checking your saved information",
+        "remember_fact": "Saving that for next time",
+        "open_app": "Opening the app",
+        "take_screenshot": "Taking a screenshot",
+        "system_status": "Checking your computer",
+        "web_agent": "Working through the website",
+    }
+    if s.startswith("web_agent step"):
+        return "Working through the website"
+    return labels.get(name, "Planning the next step")
+
+
+def _render_status(task: TaskRecord, frame: int = 0) -> str:
+    lines = ["Working on it…"]
+    if task.steps:
+        lines.append(_friendly_step(task.steps[-1]))
+    return "\n".join(lines)
+
+
 async def _ticker(task: TaskRecord, card: dict) -> None:
-    """Animate the card while the task runs: spin the loader + native typing cue."""
+    """Keep Telegram's native typing cue alive without noisy message edits."""
     try:
         while task.status in ("queued", "running") and _app is not None:
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(4.5)
             if task.status not in ("queued", "running") or card["msg_id"] is None:
                 break
-            card["spin"] = (card.get("spin", 0) + 1) % len(_SPIN)
-            if card["flusher"] is not None:  # a real step edit is already queued
-                continue
             try:
                 await _app.bot.send_chat_action(chat_id=_allowed_chat_id, action="typing")
-                await _app.bot.edit_message_text(
-                    chat_id=_allowed_chat_id, message_id=card["msg_id"],
-                    text=_render_status(task, card["spin"]))
-                card["last"] = time.monotonic()
             except Exception:
-                pass  # rate limit / not-modified: skip this beat
+                pass
     finally:
         card["ticker"] = None
 
 
-async def _finish_status_card(task: TaskRecord) -> None:
+async def _finish_status_card_legacy(task: TaskRecord) -> None:
     """Stop the animation and stamp the card with the final verdict."""
     card = _status_cards.pop(task.id, None)
     if card is None:
@@ -294,6 +509,29 @@ async def _finish_status_card(task: TaskRecord) -> None:
         try:
             await _app.bot.edit_message_text(
                 chat_id=_allowed_chat_id, message_id=card["msg_id"], text="\n".join(lines))
+        except Exception:
+            pass
+
+
+async def _finish_status_card(task: TaskRecord) -> None:
+    """Remove the temporary working card before the conversational answer."""
+    card = _status_cards.pop(task.id, None)
+    if card is None:
+        return
+    for key in ("ticker", "flusher"):
+        pending = card.get(key)
+        if pending is not None:
+            pending.cancel()
+    if card.get("msg_id") is None or _app is None:
+        return
+    try:
+        await _app.bot.delete_message(
+            chat_id=_allowed_chat_id, message_id=card["msg_id"])
+    except Exception:
+        try:
+            await _app.bot.edit_message_text(
+                chat_id=_allowed_chat_id, message_id=card["msg_id"],
+                text="Finished.")
         except Exception:
             pass
 
@@ -319,11 +557,12 @@ async def update_status(task: TaskRecord, step: str) -> None:
     state.add_step(task, step)
     if _app is None or _allowed_chat_id == 0:
         return
-    card = _status_cards.setdefault(
-        task.id, {"msg_id": None, "last": 0.0, "pending": None, "flusher": None,
-                  "ticker": None, "spin": 0})
+    card = _status_cards.setdefault(task.id, _blank_status_card())
     text = _render_status(task, card.get("spin", 0))
     if card["msg_id"] is None:
+        if card.get("seeding"):
+            card["pending"] = text
+            return
         try:
             msg = await _app.bot.send_message(chat_id=_allowed_chat_id, text=text)
             card["msg_id"] = msg.message_id
@@ -333,6 +572,8 @@ async def update_status(task: TaskRecord, step: str) -> None:
         except Exception as e:
             state.log_event({"event": "send_failed", "task": task.id, "error": str(e)})
         return
+    if card.get("ticker") is None:
+        card["ticker"] = asyncio.create_task(_ticker(task, card))
     now = time.monotonic()
     if now - card["last"] >= 1.0 and card["flusher"] is None:
         card["last"] = now
@@ -348,7 +589,7 @@ async def update_status(task: TaskRecord, step: str) -> None:
 
 
 # --- final report ---
-async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> None:
+async def _send_report_legacy(task: TaskRecord, screenshot_path: str | None = None) -> None:
     """Send final result, evidence, and any generated artifacts (downloads).
     The audit trail is written to disk but NOT pushed to the phone."""
     if _app is None or _allowed_chat_id == 0:
@@ -392,6 +633,98 @@ async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> N
                 chat_id=_allowed_chat_id,
                 document=InputFile(data, filename=Path(raw).name),
                 caption=f"Task {task.id}: {Path(raw).name}",
+            )
+        except OSError as e:
+            state.log_event({"event": "artifact_failed", "task": task.id,
+                             "path": raw, "error": str(e)})
+
+
+def _source_block(task: TaskRecord, body: str) -> str:
+    seen: set[str] = set()
+    lines: list[str] = []
+    for url in task.sources:
+        url = str(url or "").strip()
+        if (not url.startswith(("http://", "https://"))
+                or url in seen or url in body):
+            continue
+        seen.add(url)
+        host = urlsplit(url).netloc.removeprefix("www.") or "Source"
+        lines.append(f"• {host}\n  {url}")
+        if len(lines) >= 5:
+            break
+    return "\n".join(lines)
+
+
+def _artifact_caption(path: str) -> str:
+    file = Path(path)
+    lower = file.name.lower()
+    if "audit" in lower:
+        return "Activity log"
+    labels = {
+        ".csv": "Results (CSV)",
+        ".json": "Results (JSON)",
+        ".pdf": "PDF",
+        ".docx": "Document",
+        ".txt": "Notes",
+        ".xlsx": "Spreadsheet",
+    }
+    return labels.get(file.suffix.lower(), "File")
+
+
+async def send_report(task: TaskRecord, screenshot_path: str | None = None) -> None:
+    """Send one readable answer, followed only by useful evidence/files."""
+    if _app is None or _allowed_chat_id == 0:
+        return
+    detail = task.needs or task.result or ""
+    if task.status == "done":
+        body = task.result or "Done."
+    elif task.status == "needs_attention":
+        body = f"I need your help to continue.\n\n{detail}".strip()
+    elif task.status == "cancelled":
+        body = "Stopped."
+    else:
+        body = f"I couldn't finish that.\n\n{detail}".strip()
+    body = _clean_chat_text(body)
+    sources = _source_block(task, body)
+    if sources:
+        body = f"{body}\n\nSources\n{sources}"
+    for chunk in _message_chunks(body):
+        await _retry(
+            _app.bot.send_message,
+            chat_id=_allowed_chat_id,
+            text=chunk,
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+
+    if screenshot_path:
+        try:
+            with open(screenshot_path, "rb") as f:
+                data = f.read()
+            sent = await _retry(
+                _app.bot.send_photo,
+                chat_id=_allowed_chat_id,
+                photo=data,
+                caption="Final view",
+            )
+            if sent is not None:
+                os.remove(screenshot_path)
+        except OSError as e:
+            state.log_event({"event": "screenshot_failed", "error": str(e)})
+
+    state.write_audit(task)
+    sent_paths: set[str] = set()
+    for raw in (p for p in task.artifacts if p != screenshot_path):
+        if raw in sent_paths:
+            continue
+        sent_paths.add(raw)
+        try:
+            with open(raw, "rb") as f:
+                data = f.read()
+            await _retry(
+                _app.bot.send_document,
+                chat_id=_allowed_chat_id,
+                document=InputFile(data, filename=Path(raw).name),
+                caption=_artifact_caption(raw),
             )
         except OSError as e:
             state.log_event({"event": "artifact_failed", "task": task.id,
@@ -527,9 +860,22 @@ async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat_id != _allowed_chat_id:
         return
     await update.message.reply_text(
-        "Pocket Agent ready. Send a task, "
-        "/brief, /status, /cancel.")
+        "Jerry is ready. Just message me normally and tell me what you want done.\n\n"
+        "Use /help for the optional commands.")
     await _maybe_start_onboarding(update)
+
+
+async def _on_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    await update.message.reply_text(
+        "Talk to me like you would in ChatGPT or Claude — ask a question or tell me what to do.\n\n"
+        "Useful commands:\n"
+        "• /status — what I'm doing now\n"
+        "• /cancel — stop the current task\n"
+        "• /memory — saved information\n"
+        "• /remember key: value — save a fact\n"
+        "• /schedule — create a recurring task")
 
 
 async def _on_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -581,8 +927,8 @@ async def _handle_setup_reply(update: Update, text: str) -> None:
     profile_store.upsert("onboarded", "yes")  # one-time, even on a bad/partial reply
     state.log_event({"event": "onboarding_completed", "fields": sorted(parsed)})
 
-    msg = (f"Saved: {', '.join(f'{k}={v}' for k, v in parsed.items())}."
-           if parsed else "Didn't save anything usable.")
+    msg = (f"Saved: {', '.join(parsed)}."
+           if parsed else "I couldn't find anything usable to save.")
     if problems:
         msg += " " + " / ".join(problems)
     msg += " Fix anytime with /remember key: value."
@@ -592,11 +938,13 @@ async def _handle_setup_reply(update: Update, text: str) -> None:
 async def _on_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
         return
-    data = {k: v for k, v in profile_store.load().items() if k != "onboarded"}
+    hidden = {"onboarded", "last_upload", "last_upload_ts", "resume_path"}
+    data = {k: v for k, v in profile_store.load().items() if k not in hidden}
     if not data:
         await update.message.reply_text("Nothing remembered yet.")
         return
-    await update.message.reply_text("\n".join(f"{k}: {v}" for k, v in sorted(data.items())))
+    await update.message.reply_text("\n".join(
+        f"• {k.replace('_', ' ').title()}: {v}" for k, v in sorted(data.items())))
 
 
 async def _on_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -620,11 +968,13 @@ async def _dispatch_text(text: str, update: Update | None = None) -> None:
     text = _with_upload_context(text)
     ahead = state.queue.qsize() + (1 if state.current is not None else 0)
     task = state.new_task(text, origin="telegram")
-    reply = f"Queued as task {task.id} ({ahead} ahead of it)"
-    if update is not None:
-        await update.message.reply_text(reply)
+    if ahead:
+        noun = "task" if ahead == 1 else "tasks"
+        reply = f"Queued — {ahead} {noun} ahead."
     else:
-        await send_text(reply)
+        reply = "Working on it…"
+    await _seed_status_card(
+        task, reply, reply_message=update.message if update is not None else None)
 
 
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -665,14 +1015,15 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     v = update.message.voice
     if v is None:
         return
-    await update.message.reply_text("🎧 transcribing…")
+    progress = await update.message.reply_text("Transcribing…")
     tmp = os.path.join(tempfile.gettempdir(), f"pa_voice_{v.file_unique_id}.ogg")
     try:
         f = await context.bot.get_file(v.file_id)
         await f.download_to_drive(tmp)
         text = await voice.transcribe(tmp)
     except Exception as e:
-        await update.message.reply_text(f"Couldn't handle that voice message: {e}")
+        state.log_event({"event": "voice_failed", "error": str(e)})
+        await progress.edit_text("I couldn't process that voice message. Please try again.")
         return
     finally:
         try:
@@ -680,12 +1031,15 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except OSError:
             pass
     if text.startswith("Error"):
-        await update.message.reply_text(text)
+        await progress.edit_text("I couldn't process that voice message. Please try again.")
         return
     if not text.strip():
-        await update.message.reply_text("Couldn't make out any speech — try again.")
+        await progress.edit_text("I couldn't make out the speech. Please try again.")
         return
-    await update.message.reply_text(f"🎙️ heard: {text}")
+    try:
+        await progress.delete()
+    except Exception:
+        await progress.edit_text("Got it.")
     await _dispatch_text(text, update)
 
 
@@ -725,8 +1079,14 @@ async def _on_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text = f"{caption}\n(Uploaded file available at: {dest})"
         ahead = state.queue.qsize() + (1 if state.current is not None else 0)
         task = state.new_task(text, origin="telegram")
-        await update.message.reply_text(
-            f"Saved {safe_name} and queued as task {task.id} ({ahead} ahead of it).")
+        status_text = (
+            f"Saved {safe_name}. Queued — {ahead} task{'s' if ahead != 1 else ''} ahead."
+            if ahead else f"Saved {safe_name}. Working on it…"
+        )
+        await _seed_status_card(
+            task, status_text,
+            reply_message=update.message,
+        )
     else:
         await update.message.reply_text(
             f"Saved {safe_name}. Say what to do with it whenever you're ready — "
@@ -744,16 +1104,34 @@ async def _on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     cur = state.current
     if cur is None:
-        await update.message.reply_text("Idle")
+        await update.message.reply_text("I'm not working on anything right now.")
     else:
-        latest = cur.steps[-1] if cur.steps else "starting"
-        await update.message.reply_text(f"Running {cur.id}: {cur.text[:60]} → {latest}")
+        latest = _friendly_step(cur.steps[-1]) if cur.steps else "Getting started"
+        await update.message.reply_text(f"I'm working on it.\n\n{latest}")
 
 
 async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _pending_ask, _pending_secret, _pending_setup, _sched_wizard
     if not _is_allowed(update):
         return
+    stopped = await cancel_task()
+    if not stopped:
+        await update.message.reply_text("Nothing is running.")
+
+
+async def cancel_task(task_id: str | None = None) -> bool:
+    """Cancel a running or queued task from Telegram or the local J panel."""
+    global _pending_ask, _pending_secret, _pending_setup, _sched_wizard
+    target = next((t for t in state.tasks if t.id == task_id), None) if task_id else state.current
+    if target is None or target.status not in ("queued", "running"):
+        return False
+    if target.status == "queued":
+        state.mark(target, "cancelled", "Stopped by the user.")
+        clear_task_secrets(target.id)
+        await _finish_status_card(target)
+        await send_report(target)
+        return True
+    if state.current is not target:
+        return False
     _sched_wizard = None  # abort any in-progress /schedule setup
     for cid in list(_pending_confirms):
         fut = _pending_confirms.pop(cid, None)
@@ -772,10 +1150,10 @@ async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         _pending_secret = None
     if _current_run_task is not None and not _current_run_task.done():
         if state.current is not None:
-            state.mark(state.current, "cancelled")
+            state.mark(state.current, "cancelled", "Stopped by the user.")
             clear_task_secrets(state.current.id)
         _current_run_task.cancel()
-    await update.message.reply_text("Stopped.")
+    return True
 
 
 async def _on_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -787,7 +1165,8 @@ async def _on_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "a real person writing directly, a security alert). Then one line on the rest. Keep it "
         "short and natural — a few bullets max, no preamble, no markdown headers.",
         origin="telegram")
-    await update.message.reply_text(f"On it — inbox briefing queued as task {task.id}.")
+    await _seed_status_card(task, "Working on your inbox briefing…",
+                            reply_message=update.message)
 
 
 async def _on_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -799,7 +1178,8 @@ async def _on_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "browser_goto and read the results with read_page, then open the top article or two "
         "and read those too. Give me a short news briefing grouped by interest — what's new, "
         "one or two lines each, with a source link. Skip anything older than a few days.")
-    await update.message.reply_text(f"On it — news briefing queued as task {task.id}.")
+    await _seed_status_card(task, "Working on your news briefing…",
+                            reply_message=update.message)
 
 
 async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -817,7 +1197,7 @@ async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         profile_store.upsert(key, value)
         state.log_event({"event": "remember", "key": key})
-        await update.message.reply_text(f"Got it — I'll remember {key} = {value}.")
+        await update.message.reply_text(f"Got it — I'll remember your {key}.")
     except Exception as e:
         await update.message.reply_text(f"Couldn't save that: {e}")
 
@@ -914,7 +1294,7 @@ async def _on_testconfirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     asyncio.create_task(_run())
 
 
-async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _on_callback_legacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     if q is None or not _is_allowed(update):
         return
@@ -933,6 +1313,41 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     suffix = "→ Approved ✅" if approved else "→ Denied ❌"
     try:
         await q.edit_message_text(text=f"{q.message.text}\n{suffix}", reply_markup=None)
+    except Exception as e:
+        state.log_event({"event": "edit_failed", "error": str(e)})
+
+
+async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resolve approval buttons and replace the card with a short outcome."""
+    query = update.callback_query
+    if query is None or not _is_allowed(update):
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3 or parts[0] != "cfm":
+        await query.answer()
+        return
+    _, cid, flag = parts
+    fut = _pending_confirms.pop(cid, None)
+    if fut is None or fut.done():
+        await query.answer("This approval has expired.")
+        return
+    approved = flag == "y"
+    fut.set_result(approved)
+    await query.answer("Approved" if approved else "Not approved")
+    context_lines = [
+        line.strip() for line in (query.message.text or "").splitlines()
+        if line.strip().startswith(("Action:", "Site:"))
+    ][:2]
+    outcome = ("Approved. Jerry will continue."
+               if approved else "Not approved. Nothing was done.")
+    if context_lines:
+        outcome += "\n\n" + "\n".join(context_lines)
+    try:
+        await query.edit_message_text(
+            text=outcome,
+            reply_markup=None,
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
     except Exception as e:
         state.log_event({"event": "edit_failed", "error": str(e)})
 
@@ -993,6 +1408,7 @@ async def start_bridge() -> None:
             "BOT_TOKEN=<token> in .env at the project root.")
     app = Application.builder().token(config.BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", _on_start))
+    app.add_handler(CommandHandler("help", _on_help))
     app.add_handler(CommandHandler("brief", _on_brief))
     app.add_handler(CommandHandler("status", _on_status))
     app.add_handler(CommandHandler("cancel", _on_cancel))

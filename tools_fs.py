@@ -27,11 +27,14 @@ def configure(confirm=None):
     touched.clear()
 
 
-def _safe(path_str: str) -> Path:
+def _safe(path_str: str, *, allow_artifacts: bool = False) -> Path:
     """Expand + resolve a path and verify it stays inside the sandbox root."""
     p = Path(os.path.expandvars(str(path_str))).expanduser().resolve()
     root = config.SANDBOX_ROOT.expanduser().resolve()
-    if not p.is_relative_to(root):
+    allowed = [root]
+    if allow_artifacts:
+        allowed.extend((config.UPLOAD_DIR.resolve(), config.DOWNLOAD_DIR.resolve()))
+    if not any(p.is_relative_to(base) for base in allowed):
         raise ValueError(
             f"path outside sandbox. File access is restricted to {root} — "
             f"use real absolute paths under it (e.g. {root}\\Desktop\\...), "
@@ -83,7 +86,7 @@ def _read_pdf(p: Path) -> str:
 
 async def read_file(args: dict) -> str:
     try:
-        p = _safe(args["path"])
+        p = _safe(args["path"], allow_artifacts=True)
         if p.suffix.lower() == ".pdf":
             return _read_pdf(p)
         text = p.read_text(encoding="utf-8", errors="replace")
@@ -108,7 +111,7 @@ async def write_file(args: dict) -> str:
 
 async def list_dir(args: dict) -> str:
     try:
-        p = _safe(args["path"])
+        p = _safe(args["path"], allow_artifacts=True)
         entries = sorted(p.iterdir(), key=lambda e: e.name.lower())
         names = [e.name + "/" if e.is_dir() else e.name for e in entries]
         if len(names) > 50:
@@ -171,19 +174,52 @@ async def open_app(args: dict) -> str:
         return f"Error: {e}"
 
 
+def _profile_placeholder(key: str, value) -> bool:
+    text = str(value or "").strip().lower()
+    key = key.lower()
+    if key == "email" and ("@example." in text or "alex.demo" in text):
+        return True
+    if key == "name" and text in {"alex demo", "ada lovelace", "john doe", "jane doe"}:
+        return True
+    if key == "phone" and ("555-" in text or text in {"1234567890", "0000000000"}):
+        return True
+    return False
+
+
+def _clean_profile_value(key: str, value):
+    if isinstance(value, dict):
+        return {k: _clean_profile_value(str(k), v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clean_profile_value(key, v) for v in value]
+    return "(unset - ask the user)" if _profile_placeholder(key, value) else value
+
+
+def load_profile_data() -> dict:
+    """Return the merged profile without shipping demo placeholders as user facts."""
+    import yaml
+    if not config.PROFILE_PATH.exists():
+        return {}
+    data = yaml.safe_load(config.PROFILE_PATH.read_text(encoding="utf-8")) or {}
+    extra_data = profile_store.load()
+    example_path = config.PROJECT_ROOT / "profile.example.yaml"
+    example_data = (yaml.safe_load(example_path.read_text(encoding="utf-8")) or {}
+                    if example_path.exists() else {})
+    for key, value in list(data.items()):
+        if key not in extra_data and key in example_data and value == example_data[key]:
+            data[key] = "(unset - ask the user)"
+    data.update(extra_data)
+    return {k: _clean_profile_value(str(k), v) for k, v in data.items()}
+
+
 async def read_profile(args: dict) -> str:
     try:
-        if config.PROFILE_PATH.exists():
-            base = config.PROFILE_PATH.read_text(encoding="utf-8")
-        else:
-            example = config.PROJECT_ROOT / "profile.example.yaml"
-            base = ("(demo persona — profile.yaml not filled in yet)\n"
-                    + example.read_text(encoding="utf-8"))
-        # Merge in facts the user has volunteered via Telegram (/remember).
-        extra = profile_store.as_text()
-        if extra:
-            base += "\n# --- facts you told me later ---\n" + extra
-        return base
+        import yaml
+        data = load_profile_data()
+        if data:
+            return yaml.safe_dump(data, sort_keys=True, allow_unicode=True)
+        example = config.PROJECT_ROOT / "profile.example.yaml"
+        return ("(demo persona — profile.yaml not filled in yet)\n"
+                + example.read_text(encoding="utf-8"))
     except Exception as e:
         return f"Error: {e}"
 

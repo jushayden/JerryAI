@@ -25,6 +25,7 @@ VISION_MAX_ATTEMPTS = 2
 
 # --- Agent loop bounds ---
 MAX_STEPS = 25
+MAX_TOOL_CALLS_PER_TURN = 1  # observe again after every real-world action
 MODEL_CALL_TIMEOUT = 120  # seconds per model call; human waits (ask/confirm) are NOT capped
                           # by a task clock — MAX_STEPS + this bound the machine time instead
 CONFIRM_TIMEOUT = 300   # seconds waiting for phone approval; timeout == deny
@@ -84,10 +85,12 @@ EDGE_START_TIMEOUT = float(os.getenv("EDGE_START_TIMEOUT", "20"))
 # --- Mock form server ---
 MOCK_FORM_PORT = 8000
 MOCK_FORM_DIR = PROJECT_ROOT / "mock_form"
+START_MOCK_SERVER = os.getenv("START_MOCK_SERVER", "0").lower() not in ("0", "false", "no")
 
 # --- Local endpoint for the Edge J-badge extension (127.0.0.1 only) ---
 LOCAL_PORT = 8765
 LOCAL_TOKEN = os.getenv("LOCAL_TOKEN", "pocket-agent-local")
+LOCAL_UPLOAD_MAX_BYTES = int(os.getenv("LOCAL_UPLOAD_MAX_BYTES", str(50 * 1024 * 1024)))
 
 # --- Social (Track C): Reddit + YouTube read-only search, official free APIs ---
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")

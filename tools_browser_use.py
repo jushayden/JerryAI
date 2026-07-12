@@ -452,6 +452,9 @@ async def web_agent(args: dict) -> str:
             # Raises if Edge lacks the CDP port and the owner denies the relaunch;
             # the outer except turns that into a clean "Error: ..." string.
             await tools_browser._ensure_edge()
+            # A single executor owns CDP at a time. Detach the direct Playwright
+            # controller before browser-use connects; direct tools reconnect lazily.
+            await tools_browser.shutdown()
         session = BrowserSession(browser_profile=BrowserProfile(
             cdp_url=config.CDP_URL, is_local=True, keep_alive=True))
         _session = session

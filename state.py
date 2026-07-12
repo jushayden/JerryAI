@@ -52,6 +52,8 @@ class TaskRecord:
     text: str
     origin: TaskOrigin = "telegram"
     source_url: str | None = None
+    source_tab_token: str | None = None
+    attachments: list[str] = field(default_factory=list)
     status: str = "queued"  # queued|running|done|failed|needs_attention|cancelled
     started: float | None = None
     finished: float | None = None
@@ -75,6 +77,8 @@ def new_task(
     *,
     origin: TaskOrigin = "telegram",
     source_url: str | None = None,
+    source_tab_token: str | None = None,
+    attachments: list[str] | None = None,
 ) -> TaskRecord:
     """Create and enqueue a task. The old ``!`` approval bypass is intentionally gone."""
     task = TaskRecord(
@@ -82,6 +86,8 @@ def new_task(
         text=text.strip(),
         origin=origin,
         source_url=source_url or None,
+        source_tab_token=source_tab_token or None,
+        attachments=list(attachments or []),
     )
     tasks.append(task)
     queue.put_nowait(task)
@@ -91,8 +97,12 @@ def new_task(
         "text": task.text,
         "origin": task.origin,
         "source_url": task.source_url,
+        "attachments": [Path(p).name for p in task.attachments],
     })
-    audit_event(task, "task", "created", {"origin": origin, "source_url": source_url})
+    audit_event(task, "task", "created", {
+        "origin": origin, "source_url": source_url,
+        "attachments": [Path(p).name for p in task.attachments],
+    })
     return task
 
 
@@ -194,17 +204,18 @@ def compose_brief() -> str:
     needs = [t for t in tasks if t.status == "needs_attention"]
     queued = [t for t in tasks if t.status == "queued"]
     parts: list[str] = []
-    if done:
-        lines = [f"Done ({len(done)}):"]
-        lines += [f"  {t.id} {t.text[:60]}{_dur(t)}" for t in done[-5:]]
-        parts.append("\n".join(lines))
     if current is not None:
-        latest = current.steps[-1] if current.steps else "starting"
-        parts.append(f"Running: {current.id} {current.text[:60]} → {latest}")
+        parts.append(f"Working now\n• {current.text[:120]}")
     if needs:
-        lines = [f"Needs you ({len(needs)}):"]
-        lines += [f"  {t.id} {t.text[:60]} — {t.needs or '?'}" for t in needs]
+        lines = ["Needs your input"]
+        lines += [f"• {(t.needs or t.result or t.text)[:160]}" for t in needs[-5:]]
         parts.append("\n".join(lines))
     if queued:
-        parts.append(f"Queued ({len(queued)})")
-    return "\n".join(parts) if parts else "Nothing yet — send me a task."
+        noun = "task" if len(queued) == 1 else "tasks"
+        parts.append(f"Queued\n• {len(queued)} {noun}")
+    if done:
+        lines = ["Recently finished"]
+        lines += [f"• {t.text[:100]}{_dur(t)}" for t in done[-3:]]
+        parts.append("\n".join(lines))
+    return ("\n\n".join(parts) if parts
+            else "Nothing is running. Send me anything you'd like help with.")

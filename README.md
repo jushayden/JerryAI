@@ -1,4 +1,4 @@
-# Pocket Agent
+# Jerry Pocket Agent
 
 Local-first agentic AI that runs on your PC, reasons on a **local model** (Ollama — no
 cloud API anywhere in the loop), and is **controlled from your phone** via a Telegram
@@ -110,6 +110,10 @@ On your phone: `/start` once (registers you as owner), then just text tasks.
   asks you to approve the send on your phone.
 - `/news` — briefing over your `interests:` list (no setup needed beyond `profile.yaml`)
 - Just ask in plain language for Reddit/YouTube: "search reddit for X", "what's hot in r/LocalLLaMA", "find youtube videos about Y" (needs [SOCIAL_SETUP.md](SOCIAL_SETUP.md) keys)
+- Live stock research needs no API key: "Find today's major stock movers, research the top
+  five with current news and SEC filings, and explain the risks." Jerry returns sourced
+  results plus CSV/JSON data. Its score prioritizes further research; it is not a buy
+  recommendation or personalized financial advice.
 - `/remember key: value` — teach the agent a fact to reuse (e.g. `/remember work authorization: US citizen`)
 - `/schedule` — set up a recurring task (interactive: it asks *what* and *when*).
   `/schedules` to list, `/unschedule <id>` to remove. See below.

@@ -15,7 +15,7 @@ import subprocess
 import time
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import ollama
 from playwright.async_api import async_playwright, TimeoutError as PWTimeoutError
@@ -30,6 +30,7 @@ _browser = None
 _context = None
 _page = None
 _last: dict[str, dict] = {}   # data-agent-id -> element info from last extraction
+_known: dict[str, dict] = {}  # prior semantic fingerprints for rerender recovery
 _cdp = False   # True when attached to the user's real Edge over CDP (co-drive)
 _task: state.TaskRecord | None = None
 _secret_resolver = None
@@ -210,11 +211,23 @@ async def _ctx():
     # A J-badge task must begin on the tab that created it, not whichever tab was last.
     if _context.pages:
         wanted = (_task.source_url if _task is not None else None) or ""
+        token_page = None
+        wanted_token = (_task.source_tab_token if _task is not None else None) or ""
+        if wanted_token:
+            for candidate in _context.pages:
+                try:
+                    marker = await candidate.evaluate(
+                        "() => document.documentElement?.dataset?.jerryTabToken || ''")
+                    if marker == wanted_token:
+                        token_page = candidate
+                        break
+                except Exception:
+                    continue
         exact = next((p for p in _context.pages
                       if (p.url or "").rstrip("/") == wanted.rstrip("/")), None)
         prefix = next((p for p in _context.pages
                        if wanted and (p.url or "").startswith(wanted.split("#", 1)[0])), None)
-        _page = exact or prefix or _context.pages[-1]
+        _page = token_page or exact or prefix or _context.pages[-1]
     else:
         _page = await _context.new_page()
     return _page
@@ -239,6 +252,7 @@ async def shutdown():
     _pw = _browser = _context = _page = None
     _cdp = False
     _last.clear()
+    _known.clear()
     _owned_pages.clear()
     _secret_fields.clear()
 
@@ -255,11 +269,20 @@ _EXTRACT_JS = """
 (prefix) => {
   const isVisible = (el) => el.offsetParent !== null || el.getClientRects().length > 0;
   const isFormField = (el) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName);
-  const textOf = (el) => ((el.innerText || el.textContent || '')).trim().replace(/\\s+/g, ' ').slice(0, 80);
+  const cleanText = (value) => String(value || '').trim().replace(/\\s+/g, ' ');
+  const textOf = (el, limit = 80) => cleanText(el && (el.innerText || el.textContent || '')).slice(0, limit);
+  const labelTextOf = (el, limit = 180) => {
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('input, select, textarea, button, option, script, style')
+      .forEach((node) => node.remove());
+    return textOf(clone, limit);
+  };
 
   const cand = new Set();
   document.querySelectorAll(
-    'input:not([type=hidden]), select, textarea, button, a[href], [role=button], [onclick]'
+    'input:not([type=hidden]), select, textarea, button, a[href], [role=button], '
+    + '[role=checkbox], [role=radio], [role=combobox], [role=option], [aria-checked], [onclick]'
   ).forEach((el) => cand.add(el));
   document.querySelectorAll('div, span').forEach((el) => {
     try { if (getComputedStyle(el).cursor === 'pointer') cand.add(el); } catch (e) {}
@@ -286,23 +309,68 @@ _EXTRACT_JS = """
   const labelOf = (el) => {
     if (el.id) {
       const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-      if (l && textOf(l)) return textOf(l);
+      if (l && labelTextOf(l, 80)) return labelTextOf(l, 80);
     }
     const aria = el.getAttribute('aria-label');
     if (aria && aria.trim()) return aria.trim();
     const ph = el.getAttribute('placeholder');
     if (ph && ph.trim()) return ph.trim();
     const wrap = el.closest('label');
-    if (wrap && textOf(wrap)) return textOf(wrap);
-    const nm = el.getAttribute('name');
-    if (nm) return nm;
+    if (wrap && labelTextOf(wrap, 80)) return labelTextOf(wrap, 80);
+    // Lever and similar ATS pages put the question beside the field rather than
+    // associating it through standard label/aria attributes.
+    const appQuestion = el.closest('.application-question');
+    if (appQuestion) {
+      const appLabel = appQuestion.querySelector(
+        '.application-label .text, .application-label, :scope > label, :scope > div > label');
+      if (appLabel && labelTextOf(appLabel, 80)) return labelTextOf(appLabel, 80);
+    }
     if (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button'
         || el.tagName === 'DIV' || el.tagName === 'SPAN') {
       if (textOf(el)) return textOf(el);
     }
     const sib = el.previousElementSibling;
-    if (sib && textOf(sib)) return textOf(sib);
+    if (isFormField(el) && sib && sib.tagName === 'LABEL' && labelTextOf(sib, 80)) {
+      return labelTextOf(sib, 80);
+    }
+    const nm = el.getAttribute('name');
+    if (nm) return nm;
     return '';
+  };
+
+  const questionOf = (el) => {
+    const fieldset = el.closest('fieldset');
+    if (fieldset) {
+      const legend = fieldset.querySelector(':scope > legend');
+      if (legend && textOf(legend)) return textOf(legend);
+    }
+    const group = el.closest('[role=radiogroup], [role=group]');
+    if (group) {
+      const aria = group.getAttribute('aria-label');
+      if (aria) return aria.trim();
+      const labelledBy = group.getAttribute('aria-labelledby');
+      if (labelledBy) {
+        const label = document.getElementById(labelledBy);
+        if (label && textOf(label)) return textOf(label);
+      }
+    }
+    const appQuestion = el.closest('.application-question');
+    if (appQuestion) {
+      const appLabel = appQuestion.querySelector(
+        '.application-label .text, .application-label, :scope > label, :scope > div > label');
+      const text = labelTextOf(appLabel, 180);
+      if (text) return text;
+    }
+    const semanticQuestion = el.closest(
+      '[data-question], [data-testid*="question"], [data-qa*="question"], '
+      + '.form-question, .form-field, .field-wrapper');
+    if (semanticQuestion) {
+      const heading = semanticQuestion.querySelector(
+        'legend, [class*="label"], [data-testid*="label"], [data-qa*="label"]');
+      const text = labelTextOf(heading, 180);
+      if (text) return text;
+    }
+    return labelOf(el);
   };
 
   const usedIds = new Set();
@@ -314,7 +382,10 @@ _EXTRACT_JS = """
   const out = [];
   for (const el of kept) {
     const tag = el.tagName.toLowerCase();
-    const type = (el.getAttribute('type') || (tag === 'input' ? 'text' : '')).toLowerCase();
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    const type = (el.getAttribute('type')
+      || (role === 'checkbox' || role === 'radio' || role === 'combobox' ? role : '')
+      || (tag === 'input' ? 'text' : '')).toLowerCase();
     const nameValue = (el.getAttribute('name') || '') + '|' + (el.getAttribute('value') || '');
     const identity = el.id || el.getAttribute('data-id') || (nameValue !== '|' ? nameValue : '') ||
       (el.getAttribute('aria-label') || '') || (tag + '|' + textOf(el));
@@ -338,9 +409,16 @@ _EXTRACT_JS = """
       text: textOf(el),
       aria_label: (el.getAttribute('aria-label') || '').trim(),
       value: ('value' in el && el.value != null) ? String(el.value).slice(0, 120) : '',
-      checked: (type === 'checkbox' || type === 'radio') ? !!el.checked : null,
+      checked: (type === 'checkbox' || type === 'radio')
+        ? (('checked' in el) ? !!el.checked : el.getAttribute('aria-checked') === 'true')
+        : null,
       options: options,
       in_form: el.closest('form') !== null,
+      required: !!el.required || el.getAttribute('aria-required') === 'true',
+      autocomplete: el.getAttribute('autocomplete') || '',
+      role: role,
+      question: questionOf(el).slice(0, 180),
+      scope: el.closest('dialog[open], [role=dialog]') ? 'dialog' : 'page',
     });
   }
   return out;
@@ -365,6 +443,7 @@ async def _extract():
                 el["value"] = "[REDACTED]"
             el["is_submit_candidate"] = gate.is_irreversible_click(el)
             _last[el["id"]] = el
+            _known[el["id"]] = dict(el)
             elements.append(el)
     try:
         title = await page.title()
@@ -382,14 +461,18 @@ def _digest(elements, page_title, url) -> str:
     for el in elements:
         eid, tag, typ = el["id"], el["tag"], el.get("type") or ""
         label = el.get("label") or ""
-        if tag == "input" and typ in ("checkbox", "radio"):
+        question = el.get("question") or ""
+        distinct_question = question if question.lower() != label.lower() else ""
+        if typ in ("checkbox", "radio"):
             line = f'[{eid}] {typ} "{label}" {"checked" if el.get("checked") else "unchecked"}'
+            if distinct_question:
+                line += f' — question: "{distinct_question}"'
         elif tag == "input":
-            line = f'[{eid}] {typ or "text"} input "{label}" value="{el.get("value", "")}"'
+            line = f'[{eid}] {typ or "text"} input "{question or label}" value="{el.get("value", "")}"'
         elif tag == "select":
-            line = f'[{eid}] select "{label}" options: {el.get("options", "")} value="{el.get("value", "")}"'
+            line = f'[{eid}] select "{question or label}" options: {el.get("options", "")} value="{el.get("value", "")}"'
         elif tag == "textarea":
-            line = f'[{eid}] textarea "{label}" value="{el.get("value", "")}"'
+            line = f'[{eid}] textarea "{question or label}" value="{el.get("value", "")}"'
         else:
             line = f'[{eid}] {tag.upper()} "{label or el.get("text", "")}"'
         if el.get("is_submit_candidate"):
@@ -437,7 +520,17 @@ async def _challenge_on(page) -> bool:
         for f in page.frames:
             u = (f.url or "").lower()
             if any(m in u for m in _CHALLENGE_IFRAME):
-                return True
+                # Many application sites preload an invisible reCAPTCHA frame even
+                # while the form is fully usable. Stop only when a challenge widget
+                # is actually presented at a meaningful visible size.
+                try:
+                    owner = await f.frame_element()
+                    box = await owner.bounding_box()
+                    if (await owner.is_visible() and box
+                            and box["width"] >= 100 and box["height"] >= 35):
+                        return True
+                except Exception:
+                    pass
         body = (await page.evaluate("() => document.body ? document.body.innerText : ''") or "").lower()
         head = body[:1500]
         return any(t in head for t in _CHALLENGE_TEXT)
@@ -462,6 +555,26 @@ def _frame_for(el):
     idx = el.get("frame_index", 0)
     frames = page.frames
     return frames[idx] if idx < len(frames) else page.main_frame
+
+
+async def _resolve_element(field_id: str):
+    """Resolve a stale digest id after a React rerender using semantic attributes."""
+    el = _last.get(field_id)
+    if el is not None:
+        return field_id, el
+    old = _known.get(field_id)
+    if old is None:
+        return field_id, None
+    await _extract()
+    for new_id, candidate in _last.items():
+        if any(old.get(k) and old.get(k) == candidate.get(k)
+               for k in ("dom_id", "data_id")):
+            return new_id, candidate
+    keys = ("tag", "type", "name", "value", "label")
+    fingerprint = tuple(str(old.get(k) or "").lower() for k in keys)
+    matches = [item for item in _last.items()
+               if tuple(str(item[1].get(k) or "").lower() for k in keys) == fingerprint]
+    return matches[0] if len(matches) == 1 else (field_id, None)
 
 
 def _form_values() -> list[str]:
@@ -513,10 +626,174 @@ async def _clickable_control(frame, el: dict, field_id: str):
             label = frame.locator(f'label[for="{dom_id}"]')
             if await label.count() == 1 and await label.is_visible():
                 return label, loc
+        # Many real ATS forms (including Lever) wrap an id-less native input in
+        # a visible label. Clicking the hidden input itself is slow or rejected.
+        wrap = frame.locator(f'[data-agent-id="{field_id}"]').locator("xpath=ancestor::label[1]")
+        if await wrap.count() == 1 and await wrap.is_visible():
+            return wrap, loc
     return loc, loc
 
 
+async def _set_choice_state(frame, el: dict, field_id: str, desired: bool) -> None:
+    """Set a checkbox/radio state across native, wrapped, and React-controlled forms."""
+    clickable, native = await _clickable_control(frame, el, field_id)
+    if await native.is_checked() == desired:
+        return
+    if (el.get("tag") or "").lower() != "input":
+        try:
+            await clickable.press("Space", timeout=3000)
+        except Exception:
+            pass
+        if page is not None:
+            await page.wait_for_timeout(150)
+        if await native.is_checked() == desired:
+            return
+        raise RuntimeError(
+            f"{el.get('label') or field_id} did not reach "
+            f"{'checked' if desired else 'unchecked'} state")
+    try:
+        await clickable.click(timeout=6000)
+    except Exception:
+        pass
+    page = page_or_none()
+    if page is not None:
+        await page.wait_for_timeout(150)
+    if await native.is_checked() == desired:
+        return
+    try:
+        if desired:
+            await native.check(force=True, timeout=4000)
+        else:
+            await native.uncheck(force=True, timeout=4000)
+    except Exception:
+        pass
+    if page is not None:
+        await page.wait_for_timeout(150)
+    if await native.is_checked() == desired:
+        return
+    # Some controlled components cancel synthetic pointer clicks after another
+    # field rerenders. Use the browser's native property setter and emit the same
+    # bubbling events a human click produces, then verify rather than assuming.
+    await native.evaluate(
+        """(el, desired) => {
+          const win = el.ownerDocument.defaultView;
+          const setter = Object.getOwnPropertyDescriptor(
+            win.HTMLInputElement.prototype, 'checked').set;
+          setter.call(el, desired);
+          el.dispatchEvent(new win.Event('input', {bubbles: true}));
+          el.dispatchEvent(new win.Event('change', {bubbles: true}));
+        }""", desired)
+    if page is not None:
+        await page.wait_for_timeout(200)
+    if await native.is_checked() != desired:
+        raise RuntimeError(
+            f"{el.get('label') or field_id} did not reach "
+            f"{'checked' if desired else 'unchecked'} state")
+
+
 _FALSEY = {"false", "0", "no", "off", "unchecked", "none", ""}
+_FACTUAL_FIELD = re.compile(
+    r"name|email|phone|address|location|city|state|country|nationality|zip|postal|school|university|college|"
+    r"degree|graduat|company|employer|linkedin|github|portfolio|website|salary|visa|"
+    r"sponsor|authoriz|citizen|race|ethnic|hispanic|disab|veteran|gender|pronoun",
+    re.I,
+)
+
+
+def _semantic_norm(value: str) -> str:
+    """Normalize visible form text without losing meaningful words/numbers."""
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _semantic_query_matches(query: str, candidate: str) -> bool:
+    wanted = _semantic_norm(query)
+    actual = _semantic_norm(candidate)
+    return bool(wanted and actual and (wanted == actual or wanted in actual))
+
+
+def _answer_matches_option(answer: str, option: str) -> bool:
+    """Exact match plus safe label expansion, e.g. English -> English (ENG)."""
+    wanted = _semantic_norm(answer)
+    actual = _semantic_norm(option)
+    return bool(wanted and actual and (
+        wanted == actual
+        or actual.startswith(wanted + " ")
+        or wanted.startswith(actual + " ")
+    ))
+
+
+def _flatten_scalars(value) -> list[str]:
+    if isinstance(value, dict):
+        return [x for v in value.values() for x in _flatten_scalars(v)]
+    if isinstance(value, list):
+        return [x for v in value for x in _flatten_scalars(v)]
+    text = str(value or "").strip()
+    return [text] if text and not text.startswith("(unset") else []
+
+
+async def _grounded_value(value: str, *, choice: bool = False) -> bool:
+    """Accept factual application values only from profile or the current request."""
+    import tools_fs
+    import yaml
+    wanted = str(value or "").strip().lower()
+    if not wanted:
+        return True
+    profile_text = await tools_fs.read_profile({})
+    try:
+        scalars = [x.lower() for x in _flatten_scalars(yaml.safe_load(profile_text) or {})]
+    except Exception:
+        scalars = []
+    request = ((_task.text if _task else "") + " " +
+               ((_task.source_url or "") if _task else "")).lower()
+    if wanted in scalars:
+        if choice and wanted in {"yes", "no", "none", "other"}:
+            return f"choose {wanted}" in request or f"answer {wanted}" in request
+        return True
+    if len(wanted) >= 2 and any(
+            wanted in re.findall(r"[a-z0-9@.+-]+", scalar) for scalar in scalars):
+        return True
+    if len(wanted) >= 4 and wanted in request:
+        return True
+    if choice:
+        meaningful = [t for t in re.findall(r"[a-z0-9]+", wanted)
+                      if len(t) >= 3 and t not in {"the", "and", "from", "with", "option"}]
+        grounded_text = " ".join(scalars + [request])
+        return any(re.search(rf"\b{re.escape(token)}\b", grounded_text) for token in meaningful)
+    return False
+
+
+async def _grounded_form_choice(value: str, question: str, *, choice: bool) -> bool:
+    """Ground a choice against the matching question, not an unrelated profile token."""
+    import tools_fs
+    import profile_store
+
+    value = str(value or "").strip()
+    question = str(question or "").strip()
+    if not value:
+        return True
+    request = ((_task.text if _task else "") + " " +
+               ((_task.source_url or "") if _task else "")).lower()
+    wanted_in_request = _semantic_norm(value)
+    normalized_request = _semantic_norm(request)
+    if (len(wanted_in_request) >= 2
+            and re.search(rf"(?<![a-z0-9]){re.escape(wanted_in_request)}(?![a-z0-9])",
+                          normalized_request)):
+        return True
+    remembered = profile_store.application_answer(question)
+    if remembered and _answer_matches_option(remembered, value):
+        return True
+    profile = tools_fs.load_profile_data()
+    for answer in _profile_choice_values_for_question(profile, question):
+        if _answer_matches_option(answer, value):
+            return True
+    mapped = _profile_value_for_field(profile, {"question": question})
+    if mapped and _answer_matches_option(mapped, value):
+        return True
+    # Non-generic choices such as a language or office location can still be
+    # grounded in a profile scalar. Generic Yes/No must be tied to this question.
+    if _semantic_norm(value) not in {"yes", "no", "none", "other"}:
+        return await _grounded_value(value, choice=choice)
+    return False
 
 
 # --- tool fns (never raise) ---
@@ -582,7 +859,7 @@ async def find_elements(args: dict) -> str:
         matches = []
         for field_id, el in _last.items():
             haystack = " ".join(str(el.get(k) or "") for k in
-                                ("label", "text", "aria_label", "name", "value")).lower()
+                                ("question", "label", "text", "aria_label", "name", "value")).lower()
             if query and query not in haystack:
                 continue
             if group and group not in str(el.get("name") or "").lower():
@@ -592,6 +869,7 @@ async def find_elements(args: dict) -> str:
                 "tag": el.get("tag"),
                 "type": el.get("type"),
                 "group": el.get("name"),
+                "question": el.get("question"),
                 "label": el.get("label") or el.get("aria_label") or el.get("text"),
                 "value": el.get("value"),
                 "checked": el.get("checked"),
@@ -599,6 +877,16 @@ async def find_elements(args: dict) -> str:
         _audit("find_elements", {"query": query, "group": group,
                                  "matches": len(matches)}, ok=True)
         if not matches:
+            application_form = (
+                bool(re.search(r"/apply|/application|jobs?\.", page.url, re.I))
+                or (any(el.get("type") == "file" for el in _last.values())
+                    and any(el.get("tag") == "textarea" for el in _last.values()))
+            )
+            if application_form:
+                return (f"No application-form control matched '{query or group}'. "
+                        "Do not invent this question and do not use vision to click a "
+                        "different field. Re-read extract_form_fields and work only "
+                        "from the questions actually returned by the page.")
             return (f"No DOM controls matched '{query or group}'. On app-style sites many "
                     "controls (color swatches, icon buttons, image pickers, sliders) carry "
                     "no text in the DOM — use visual_inspect with a plain description "
@@ -621,6 +909,10 @@ async def choose_option(args: dict) -> str:
         await _extract()
         label = str(args.get("label", "")).strip()
         group = str(args.get("group", "")).strip()
+        question = str(args.get("question", "")).strip()
+        raw_selected = args.get("selected", True)
+        selected_state = (raw_selected if isinstance(raw_selected, bool)
+                          else str(raw_selected).strip().lower() not in _FALSEY)
         if not label:
             return "Error: label is required"
         eligible = []
@@ -630,19 +922,33 @@ async def choose_option(args: dict) -> str:
                 continue
             if group and str(el.get("name") or "").lower() != group.lower():
                 continue
-            display = str(el.get("label") or el.get("aria_label") or "")
-            group_choices.append(display)
-            if display.lower() == label.lower():
+            actual_question = str(el.get("question") or "")
+            if question and not _semantic_query_matches(question, actual_question):
+                continue
+            display = str(el.get("label") or el.get("aria_label") or el.get("value") or "")
+            group_choices.append(
+                f"{actual_question}: {display}" if actual_question and actual_question != display
+                else display)
+            if _semantic_norm(display) == _semantic_norm(label):
                 eligible.insert(0, (field_id, el, True))
-            elif label.lower() in display.lower():
+            elif _semantic_query_matches(label, display):
                 eligible.append((field_id, el, False))
         exact = [x for x in eligible if x[2]]
         selected = exact or eligible
         if len(selected) != 1:
             reason = "no exact choice" if not selected else "ambiguous choice"
-            return (f"Error: {reason} for {label!r} in group {group or '(any)'}. "
-                    f"Available choices: {', '.join(x for x in group_choices if x) or '(none)'}")
-        return await click_element({"field_id": selected[0][0]})
+            scope = question or group or "(any question)"
+            return (f"Error: {reason} for {label!r} under {scope!r}. "
+                    f"Available choices: {'; '.join(x for x in group_choices if x) or '(none)'}. "
+                    "Provide the exact question text when labels such as Yes/No repeat.")
+        field_id, el, _ = selected[0]
+        if not selected_state:
+            if (el.get("type") or "").lower() != "checkbox":
+                return "Error: a radio option cannot be deselected directly; select the intended alternative."
+            return await fill_field({"field_id": field_id, "value": False})
+        if el.get("checked"):
+            return f"Already selected: {el.get('label') or label}."
+        return await click_element({"field_id": field_id})
     except Exception as e:
         return f"Error: could not choose option: {e}"
 
@@ -650,9 +956,20 @@ async def choose_option(args: dict) -> str:
 async def fill_field(args: dict) -> str:
     field_id = str(args.get("field_id") or "").strip()
     value = args.get("value", "")
-    el = _last.get(field_id)
+    field_id, el = await _resolve_element(field_id)
     if el is None:
         return f"Error: field {field_id} not in the last extraction — call extract_form_fields."
+    semantics = " ".join(str(el.get(k) or "") for k in
+                         ("label", "aria_label", "text")).strip()
+    if not semantics and not args.get("_from_visual"):
+        return (f"Error: {field_id} is an unlabeled control and cannot be clicked directly. "
+                "Use visual_inspect with the requested target, then visual_click.")
+    label = str(el.get("label") or el.get("aria_label") or el.get("name") or "")
+    narrative_field = (el.get("tag") == "textarea" and len(str(value).strip()) >= 80)
+    if (str(value).strip() and _FACTUAL_FIELD.search(label) and not narrative_field
+            and not await _grounded_value(str(value))):
+        return (f"Error: {value!r} is not a verified profile value for {label!r}. "
+                "Use ask_user instead of inventing application data.")
     global _scroll_streak
     _scroll_streak = 0
     try:
@@ -660,14 +977,7 @@ async def fill_field(args: dict) -> str:
         loc = _control_locator(frame, el, field_id)
         if (el.get("type") or "").lower() in ("checkbox", "radio"):
             desired = str(value).strip().lower() not in _FALSEY
-            clickable, native = await _clickable_control(frame, el, field_id)
-            current = await native.is_checked()
-            if current != desired:
-                await clickable.click(timeout=15000)
-            await (await _ctx()).wait_for_timeout(300)
-            refreshed = _control_locator(frame, el, field_id)
-            if await refreshed.is_checked() != desired:
-                raise RuntimeError(f"{el.get('label') or field_id} did not reach the requested state")
+            await _set_choice_state(frame, el, field_id, desired)
         else:
             await loc.fill(str(value), timeout=15000)
         _audit("fill", {"field": field_id, "label": el.get("label"), "value": value}, ok=True)
@@ -679,20 +989,69 @@ async def fill_field(args: dict) -> str:
 async def select_option(args: dict) -> str:
     field_id = str(args.get("field_id") or "").strip()
     option = str(args.get("option", ""))
-    el = _last.get(field_id)
+    question = str(args.get("question") or "").strip()
+    if not field_id:
+        if not question:
+            return "Error: provide field_id or question"
+        try:
+            await _extract()
+        except Exception as e:
+            return f"Error: could not inspect dropdowns: {e}"
+        candidates = [
+            (candidate_id, candidate)
+            for candidate_id, candidate in _last.items()
+            if candidate.get("tag") == "select"
+            and _semantic_query_matches(
+                question, candidate.get("question") or candidate.get("label") or "")
+        ]
+        if len(candidates) != 1:
+            available = [
+                candidate.get("question") or candidate.get("label") or candidate_id
+                for candidate_id, candidate in _last.items()
+                if candidate.get("tag") == "select"
+            ]
+            reason = "not found" if not candidates else "ambiguous"
+            return (f"Error: dropdown question {question!r} was {reason}. "
+                    f"Available dropdowns: {'; '.join(available[:25]) or '(none)'}")
+        field_id = candidates[0][0]
+    field_id, el = await _resolve_element(field_id)
     if el is None:
         return f"Error: field {field_id} not in the last extraction — call extract_form_fields."
+    if el.get("tag") != "select":
+        return f"Error: field {field_id} is not a native select dropdown."
     global _scroll_streak
     _scroll_streak = 0
     try:
         frame = _frame_for(el)
-        loc = frame.locator(f'[data-agent-id="{field_id}"]')
-        try:
-            await loc.select_option(label=option, timeout=15000)
-        except Exception:
-            await loc.select_option(value=option, timeout=15000)
-        _audit("select", {"field": field_id, "label": el.get("label"), "option": option}, ok=True)
-        return f"Selected \"{option}\" in {field_id}.\n" + await _fresh_digest()
+        loc = _control_locator(frame, el, field_id)
+        choices = await loc.locator("option").evaluate_all(
+            """options => options.map((o, index) => ({
+              index, label: String(o.label || o.textContent || '').trim(),
+              value: String(o.value || '')
+            }))""")
+        wanted = _semantic_norm(option)
+        exact = [
+            choice for choice in choices
+            if _semantic_norm(choice["label"]) == wanted
+            or _semantic_norm(choice["value"]) == wanted
+        ]
+        semantic_label = str(el.get("question") or el.get("label") or "")
+        if len(exact) != 1:
+            return (f"Error: exact dropdown option {option!r} was not found in "
+                    f"{semantic_label or field_id!r}. Available options: "
+                    f"{'; '.join(x['label'] for x in choices[:40])}")
+        if (_FACTUAL_FIELD.search(semantic_label)
+                and not await _grounded_form_choice(option, semantic_label, choice=False)):
+            return (f"Error: option {option!r} is not a verified profile value for "
+                    f"{semantic_label!r}. Use ask_user instead of guessing.")
+        await loc.select_option(index=exact[0]["index"], timeout=15000)
+        selected_label = await loc.locator("option:checked").first.inner_text()
+        if _semantic_norm(selected_label) != _semantic_norm(exact[0]["label"]):
+            raise RuntimeError(f"dropdown reported {selected_label!r} after selection")
+        _audit("select", {"field": field_id, "label": semantic_label,
+                          "option": exact[0]["label"]}, ok=True)
+        return (f"Selected \"{exact[0]['label']}\" for \"{semantic_label or field_id}\". "
+                "Verified the dropdown value.\n" + await _fresh_digest())
     except Exception as e:
         return f"Error: could not select \"{option}\" in {field_id}: {e}"
 
@@ -700,12 +1059,12 @@ async def select_option(args: dict) -> str:
 async def upload_file(args: dict) -> str:
     field_id = str(args.get("field_id") or "").strip()
     path = str(args.get("path") or "")
-    el = _last.get(field_id)
+    field_id, el = await _resolve_element(field_id)
     if el is None:
         return f"Error: field {field_id} not in the last extraction — call extract_form_fields."
     try:
         import tools_fs
-        p = tools_fs._safe(path)  # same sandbox rule as every other file access
+        p = tools_fs._safe(path, allow_artifacts=True)
         if not p.is_file():
             return f"Error: {p} does not exist or is not a file."
         frame = _frame_for(el)
@@ -720,13 +1079,25 @@ async def upload_file(args: dict) -> str:
 async def click_element(args: dict) -> str:
     global _secret_login_authorization
     field_id = str(args.get("field_id") or "").strip()
-    el = _last.get(field_id)
+    field_id, el = await _resolve_element(field_id)
     if el is None:
         return f"Error: field {field_id} not in the last extraction — call extract_form_fields."
+    if (el.get("type") or "").lower() in ("radio", "checkbox"):
+        choice = str(el.get("label") or el.get("aria_label") or el.get("value") or "")
+        question = str(el.get("question") or "")
+        if (not el.get("checked")
+                and not await _grounded_form_choice(choice, question, choice=True)):
+            return (f"Error: option {choice!r} is not grounded in the user's profile or request. "
+                    "Use ask_user instead of guessing this application answer.")
     global _scroll_streak
     _scroll_streak = 0
     try:
         page = await _ctx()
+        frame = _frame_for(el)
+        loc, native = await _clickable_control(frame, el, field_id)
+        if (el.get("type") or "").lower() in ("radio", "checkbox") and await native.is_checked():
+            return (f"Already selected: {el.get('label') or field_id}. "
+                    "Verified the control is checked.\n" + await _fresh_digest())
         login_authorized = False
         if _secret_login_authorization is not None:
             auth = _secret_login_authorization
@@ -739,7 +1110,8 @@ async def click_element(args: dict) -> str:
                 _secret_login_authorization = None
                 _audit("login_authorized_by_secret_reply",
                        {"domain": auth["domain"], "field": auth["field"]}, ok=True)
-        if gate.is_irreversible_click(el) and not login_authorized:
+        application_entry = gate.is_application_entry_click(el)
+        if gate.is_irreversible_click(el) and not application_entry and not login_authorized:
             el_for_gate = dict(el)
             try:
                 title = await page.title()
@@ -750,11 +1122,24 @@ async def click_element(args: dict) -> str:
             approved = await _confirm_cb(summary)
             if not approved:
                 return DENIED_MSG
-        frame = _frame_for(el)
-        loc, native = await _clickable_control(frame, el, field_id)
         if _dialog_action is not None:
             page.once("dialog", _handle_next_dialog)
-        await loc.click(timeout=15000)
+        before_click = await _page_action_fingerprint(page)
+        post_state_verified = False
+        if (el.get("type") or "").lower() in ("radio", "checkbox"):
+            await _set_choice_state(frame, el, field_id, True)
+        else:
+            try:
+                await loc.click(timeout=7000)
+            except Exception as click_error:
+                # Some React controls replace or cover themselves after receiving
+                # the click, causing Playwright to time out even though the page
+                # advanced. Accept only a verified URL/dialog/DOM state change.
+                await page.wait_for_timeout(300)
+                after_click = await _page_action_fingerprint(page)
+                if after_click == before_click:
+                    raise click_error
+                post_state_verified = True
         verified = ""
         if (el.get("type") or "").lower() in ("radio", "checkbox"):
             await page.wait_for_timeout(300)
@@ -763,15 +1148,19 @@ async def click_element(args: dict) -> str:
                 raise RuntimeError(f"{el.get('label') or field_id} was clicked but is not selected")
             verified = f" Verified selected: {el.get('label') or field_id}."
         _dom_failures.pop(field_id, None)
-        _audit("click", {"field": field_id, "label": el.get("label")}, ok=True)
+        _audit("application_open" if application_entry else "click",
+               {"field": field_id, "label": el.get("label")}, ok=True)
         try:
             await page.wait_for_load_state("networkidle", timeout=10000)
         except PWTimeoutError:
             pass
+        if post_state_verified:
+            verified += " Verified the page changed after the click."
         return f"Clicked {field_id}.{verified}\n" + await _fresh_digest()
     except Exception as e:
         _dom_failures[field_id] = _dom_failures.get(field_id, 0) + 1
-        if (_dom_failures[field_id] >= 2 and config.VISION_ENABLED
+        if ((el.get("type") or "").lower() not in ("radio", "checkbox")
+                and _dom_failures[field_id] >= 2 and config.VISION_ENABLED
                 and not args.get("_no_visual")):
             target = el.get("label") or el.get("text") or el.get("aria_label") or field_id
             vision = await visual_inspect({"target": target})
@@ -896,8 +1285,18 @@ async def browser_forward(args: dict) -> str:
 
 async def reload_page(args: dict) -> str:
     try:
+        # Reloading a form destroys unsaved user input. Permit it only as a
+        # recovery after Jerry has objective evidence that normal DOM actions are
+        # repeatedly failing or that scrolling is no longer making progress.
+        repeated_failures = max(_dom_failures.values(), default=0) >= 2
+        navigation_stuck = _scroll_streak > 3
+        if not (repeated_failures or navigation_stuck):
+            return ("Error: reload refused because the page is not demonstrably stuck. "
+                    "Reloading can erase completed form fields. Re-read the current page "
+                    "with extract_form_fields/read_page and continue without refreshing.")
         page = await _ctx()
         await page.reload(wait_until="load", timeout=20000)
+        _dom_failures.clear()
         _audit("reload", {"url": page.url}, ok=True)
         return await _fresh_digest()
     except Exception as e:
@@ -905,19 +1304,46 @@ async def reload_page(args: dict) -> str:
 
 
 _SCROLL_JS = """(amt) => {
-  const cands = [document.scrollingElement,
-    ...Array.from(document.querySelectorAll('div,main,section,aside,ul'))
-      .filter(el => el.clientHeight > 150 && el.scrollHeight > el.clientHeight + 20 &&
-                    /(auto|scroll)/.test(getComputedStyle(el).overflowY))]
+  const visible = (el) => {
+    if (el === document.scrollingElement) return true;
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return r.width >= 240 && r.height >= Math.min(220, innerHeight * .4) &&
+      r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth &&
+      s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity || 1) > .05;
+  };
+  const candidates = [document.scrollingElement,
+    ...Array.from(document.querySelectorAll('div,main,section,aside'))]
     .filter(Boolean)
-    .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
-  for (const el of cands) {
+    .filter(el => visible(el) && el.scrollHeight > el.clientHeight + 40 &&
+      (el === document.scrollingElement || /(auto|scroll)/.test(getComputedStyle(el).overflowY)))
+    .filter(el => !el.closest('nav,[role=listbox],[role=menu]'))
+    .map(el => {
+      const r = el === document.scrollingElement
+        ? {left:0,top:0,width:innerWidth,height:innerHeight}
+        : el.getBoundingClientRect();
+      const range = el.scrollHeight - el.clientHeight;
+      const room = amt >= 0 ? range - el.scrollTop : el.scrollTop;
+      const rightPanel = r.left >= innerWidth * .35 ? r.width * r.height * .35 : 0;
+      const mainBonus = /^(MAIN|ASIDE)$/.test(el.tagName) ? r.width * r.height * .3 : 0;
+      return {el, score:r.width * r.height + rightPanel + mainBonus + Math.min(range, 4000) * 80,
+        room, rect:r};
+    })
+    .filter(x => x.room > 2)
+    .sort((a, b) => b.score - a.score);
+  for (const candidate of candidates) {
+    const el = candidate.el;
     const before = el.scrollTop;
+    const oldBehavior = el.style.scrollBehavior;
+    el.style.scrollBehavior = 'auto';
     el.scrollTop = before + amt;
-    if (Math.abs(el.scrollTop - before) > 1)
+    const after = el.scrollTop;
+    el.style.scrollBehavior = oldBehavior;
+    if (Math.abs(after - before) > 1)
       return {moved: Math.round(el.scrollTop - before),
               what: el === document.scrollingElement ? 'page'
-                    : (el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0]).slice(0, 40)};
+                    : (el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0]).slice(0, 60),
+              left:Math.round(candidate.rect.left), top:Math.round(candidate.rect.top),
+              width:Math.round(candidate.rect.width), height:Math.round(candidate.rect.height)};
   }
   return null;
 }"""
@@ -950,7 +1376,7 @@ async def scroll_page(args: dict) -> str:
             pass
         if res is None:  # nothing obviously scrollable: wheel at the viewport centre
             vp = await page.evaluate("() => ({w: innerWidth, h: innerHeight})")
-            await page.mouse.move(vp["w"] / 2, vp["h"] / 2)
+            await page.mouse.move(vp["w"] * 0.75, vp["h"] / 2)
             await page.mouse.wheel(0, amount)
             note = ("(note: no scrollable area was detected — the wheel was tried at the "
                     "page centre; if content did not change, this page may not scroll and "
@@ -1202,6 +1628,80 @@ async def scrape_page(args: dict) -> str:
         return f"Error: scrape failed: {e}"
 
 
+async def scrape_instagram_posts(args: dict) -> str:
+    """Read visible Instagram posts/reels and retain their exact content URLs."""
+    try:
+        page = await _ctx()
+        if "instagram.com" not in urlsplit(page.url).netloc.lower():
+            instagram_page = next((candidate for candidate in (_context.pages if _context else [])
+                                   if "instagram.com" in urlsplit(candidate.url).netloc.lower()), None)
+            if instagram_page is None:
+                return "Error: no open Instagram tab was found in the co-drive Edge session."
+            await _select_page(instagram_page)
+            page = instagram_page
+        if await _challenge_on(page):
+            return CHALLENGE_MSG
+        max_posts = max(1, min(30, int(args.get("max_posts", 10))))
+        scrolls = max(0, min(4, int(args.get("scrolls", 0))))
+        found: dict[str, dict] = {}
+        for step in range(scrolls + 1):
+            batch = await page.evaluate(
+                """(limit) => {
+                  const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+                  const postPath = href => /^\/(p|reel|reels)\/[^/?#]+/.test(href || '');
+                  const anchors = Array.from(document.querySelectorAll(
+                    'a[href^="/p/"], a[href^="/reel/"], a[href^="/reels/"]'));
+                  const out = [], seen = new Set();
+                  for (const anchor of anchors) {
+                    const href = anchor.getAttribute('href') || '';
+                    if (!postPath(href)) continue;
+                    const url = new URL(href, location.origin).href.split('?')[0];
+                    if (seen.has(url)) continue;
+                    seen.add(url);
+                    const article = anchor.closest('article');
+                    const container = article || anchor.closest('[role=button]') || anchor.parentElement;
+                    const profileAnchors = article ? Array.from(article.querySelectorAll('a[href^="/"]')) : [];
+                    const profile = profileAnchors.find(a => {
+                      const p = (a.getAttribute('href') || '').split('?')[0];
+                      return /^\/[A-Za-z0-9._]+\/$/.test(p) && !postPath(p);
+                    });
+                    const username = profile
+                      ? (profile.getAttribute('href') || '').replace(/^\//,'').replace(/\/$/,'')
+                      : (location.pathname.match(/^\/([A-Za-z0-9._]+)\/?$/) || [,''])[1];
+                    const time = article && article.querySelector('time');
+                    const image = (article || anchor).querySelector && (article || anchor).querySelector('img[alt]');
+                    const text = clean(container && container.innerText).slice(0, 1600);
+                    out.push({url, username, profile_url: username ? `${location.origin}/${username}/` : '',
+                      timestamp: time ? (time.getAttribute('datetime') || clean(time.innerText)) : '',
+                      media_description: image ? clean(image.getAttribute('alt')).slice(0, 600) : '',
+                      visible_text: text,
+                      sponsored: /\\bSponsored\\b/i.test(text)});
+                    if (out.length >= limit) break;
+                  }
+                  return out;
+                }""", max_posts)
+            for post in batch:
+                found.setdefault(post["url"], post)
+            if len(found) >= max_posts or step >= scrolls:
+                break
+            await page.evaluate("() => window.scrollBy({top: Math.min(innerHeight * .8, 800), behavior: 'auto'})")
+            await page.wait_for_timeout(800)
+        posts = list(found.values())[:max_posts]
+        if not posts:
+            body = (await page.locator("body").inner_text(timeout=10000))[:1200]
+            return ("No direct Instagram post/reel anchors are currently rendered. "
+                    "The page may be on Stories, a private profile, or still loading. "
+                    f"Visible text: {body}")
+        for post in posts:
+            _remember_source(post["url"])
+        _audit("instagram_posts_scraped", {"count": len(posts), "scrolls": scrolls,
+                                            "url": page.url}, ok=True)
+        return json.dumps({"page": page.url, "count": len(posts), "posts": posts},
+                          ensure_ascii=False)
+    except Exception as e:
+        return f"Error: Instagram post extraction failed: {e}"
+
+
 async def _unload_model(client, model: str) -> None:
     try:
         await client.generate(model=model, prompt="", keep_alive=0)
@@ -1249,12 +1749,30 @@ async def _remove_vision_overlay(page) -> None:
         pass
 
 
+async def _page_action_fingerprint(page) -> str:
+    """Compact state used to prove that a visual click changed the rendered app."""
+    data = await page.evaluate(
+        """() => ({
+          url: location.href,
+          text: (document.body?.innerText || '').replace(/\s+/g,' ').slice(0,5000),
+          selected: Array.from(document.querySelectorAll(
+            'input:checked,[aria-checked=true],[aria-selected=true],[data-id-selected=true],.selected,.is-selected'))
+            .slice(0,80).map(el => [el.id,el.getAttribute('data-id'),el.getAttribute('aria-label'),
+              el.getAttribute('value'),String(el.className).slice(0,120)]),
+          images: Array.from(document.images).slice(0,30).map(img => img.currentSrc || img.src),
+          scroll: [scrollX,scrollY,...Array.from(document.querySelectorAll('div,main,section,aside'))
+            .filter(el => el.scrollTop).slice(0,20).map(el => el.scrollTop)]
+        })"""
+    )
+    return json.dumps(data, sort_keys=True, ensure_ascii=False)
+
+
 async def visual_inspect(args: dict) -> str:
     global _visual_target, _visual_attempts
     if not config.VISION_ENABLED:
         return "Error: local vision is disabled."
     if _visual_attempts >= config.VISION_MAX_ATTEMPTS:
-        return "Error: visual fallback already failed twice; ask the user for help."
+        return "Error: visual fallback failed twice consecutively; ask the user for help."
     try:
         page = await _ctx()
         if await _challenge_on(page):
@@ -1262,7 +1780,6 @@ async def visual_inspect(args: dict) -> str:
         description = str(args.get("target", "")).strip()
         if not description:
             return "Error: describe the visual target"
-        _visual_attempts += 1
         config.SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
         path = config.SCREENSHOT_DIR / f"vision_{int(time.time() * 1000)}.png"
         await _extract()
@@ -1314,9 +1831,20 @@ async def visual_inspect(args: dict) -> str:
             element_id = ""
         if element_id:
             el = _last[element_id]
+            semantic = " ".join(str(el.get(k) or "") for k in
+                                ("label", "aria_label", "text", "value")).lower()
+            distinctive = [token for token in re.findall(r"[a-z0-9]+", description.lower())
+                           if len(token) >= 3 and token not in {
+                               "the", "and", "option", "button", "selected", "color",
+                               "exterior", "interior", "target", "control"}]
+            if semantic and distinctive and not any(token in semantic for token in distinctive):
+                _visual_attempts += 1
+                return ("Error: vision mapped the request to a contradictory DOM element "
+                        f"({semantic[:100]!r}); scroll to the requested section and inspect again.")
             box = await _frame_for(el).locator(
                 f'[data-agent-id="{element_id}"]').bounding_box(timeout=15000)
             if box is None:
+                _visual_attempts += 1
                 return "Error: the VLM-selected DOM element is no longer visible."
             x = int(box["x"] + box["width"] / 2)
             y = int(box["y"] + box["height"] / 2)
@@ -1324,17 +1852,21 @@ async def visual_inspect(args: dict) -> str:
             x, y = int(target["x"]), int(target["y"])
         confidence = float(target.get("confidence", 0))
         if not (0 <= x < viewport["width"] and 0 <= y < viewport["height"]):
+            _visual_attempts += 1
             return "Error: vision returned coordinates outside the viewport."
         if confidence < config.VISION_MIN_CONFIDENCE:
+            _visual_attempts += 1
             return f"Error: visual target confidence {confidence:.2f} is too low."
         _visual_target = {
             "x": x, "y": y, "label": str(target.get("label", description)),
             "confidence": confidence, "description": description, "element_id": element_id,
         }
         _audit("visual_inspect", _visual_target, ok=True)
+        _visual_attempts = 0
         return json.dumps(_visual_target, ensure_ascii=False)
     except Exception as e:
         _visual_target = None
+        _visual_attempts += 1
         return f"Error: visual inspection failed: {e}"
 
 
@@ -1349,11 +1881,19 @@ async def visual_click(args: dict) -> str:
         target = _visual_target
         if target is None:
             return "Error: call visual_inspect first."
+        before = await _page_action_fingerprint(page)
         if target.get("element_id") in _last:
             field_id = target["element_id"]
             result = await click_element(
-                {"field_id": field_id, "_no_visual": bool(args.get("_no_visual"))})
+                {"field_id": field_id, "_no_visual": bool(args.get("_no_visual")),
+                 "_from_visual": True})
             if not result.startswith(("Error", "User DENIED")):
+                after = await _page_action_fingerprint(page)
+                if after == before:
+                    _audit("visual_dom_click_no_change", {**target, "field": field_id}, ok=False)
+                    _visual_target = None
+                    return ("Error: the visual click produced no detectable page or selection "
+                            "change. Do not claim success; scroll/re-observe and target it again.")
                 _audit("visual_dom_click", {**target, "field": field_id}, ok=True)
                 _visual_target = None
             return result
@@ -1379,11 +1919,476 @@ async def visual_click(args: dict) -> str:
             if not await _confirm_cb(summary):
                 return DENIED_MSG
         await page.mouse.click(target["x"], target["y"])
+        await page.wait_for_timeout(700)
+        after = await _page_action_fingerprint(page)
+        if after == before:
+            _audit("visual_click_no_change", {**target, "opaque": opaque}, ok=False)
+            _visual_target = None
+            return ("Error: the visual click produced no detectable page or selection change. "
+                    "Do not claim success; scroll/re-observe and target it again.")
         _audit("visual_click", {**target, "opaque": opaque}, ok=True)
         _visual_target = None
         return await _fresh_digest()
     except Exception as e:
         return f"Error: visual click failed: {e}"
+
+
+# --- deterministic job search and application workflow ---
+
+def _usable_profile_value(value) -> str:
+    if isinstance(value, (dict, list)):
+        return ""
+    text = str(value or "").strip()
+    return "" if (not text or text.lower().startswith("(unset")
+                  or text.lower().startswith("(leave blank")) else text
+
+
+def _profile_choice_values_for_question(profile: dict, question: str) -> list[str]:
+    """Return only profile facts semantically tied to this choice question."""
+    question = _semantic_norm(question)
+    keys: list[str] = []
+    if "language" in question:
+        keys = ["languages", "language_skills"]
+    elif "legally authorized" in question or "work authorization" in question:
+        keys = ["work_authorization", "work_authorized", "authorized_to_work"]
+    elif "sponsor" in question or "visa status" in question:
+        keys = ["sponsorship", "requires_sponsorship", "visa_sponsorship", "visa_status"]
+    elif "final internship" in question:
+        keys = ["final_internship"]
+    elif "offer deadline" in question:
+        keys = ["offer_deadlines", "offer_deadline"]
+    elif "preferred office" in question or "preferred location" in question:
+        keys = ["preferred_office_locations", "preferred_locations"]
+    elif "preferred palantir product" in question:
+        keys = ["preferred_palantir_products"]
+    elif "ai notetaker" in question or "transcribe conversations" in question:
+        keys = ["ai_notetaker_consent"]
+    elif "veteran" in question:
+        keys = ["veteran_status"]
+    elif "disab" in question:
+        keys = ["disabilities", "disability_status"]
+    elif "hispanic" in question or "latino" in question:
+        keys = ["hispanic"]
+    elif "race" in question or "ethnic" in question:
+        keys = ["race"]
+    elif "gender" in question:
+        keys = ["gender"]
+
+    values: list[str] = []
+    for key in keys:
+        raw = profile.get(key)
+        if isinstance(raw, list):
+            values.extend(str(item).strip() for item in raw if str(item).strip())
+        elif raw is not None:
+            text = _usable_profile_value(raw)
+            if text:
+                # /remember stores multi-select facts as a scalar.
+                values.extend(part.strip() for part in re.split(r"[,;\n|]+", text) if part.strip())
+    return values
+
+
+def _profile_year(value) -> str:
+    match = re.search(r"\b(19|20)\d{2}\b", str(value or ""))
+    return match.group(0) if match else ""
+
+
+def _profile_value_for_field(profile: dict, el: dict) -> str:
+    """Map a common application field to a grounded profile value."""
+    label = " ".join(str(el.get(k) or "") for k in
+                     ("question", "label", "aria_label", "name", "autocomplete")).lower()
+    name = _usable_profile_value(profile.get("name"))
+    parts = name.split()
+    first = _usable_profile_value(profile.get("first_name")) or (parts[0] if parts else "")
+    last = _usable_profile_value(profile.get("last_name")) or (" ".join(parts[1:]) if len(parts) > 1 else "")
+    links = profile.get("links") if isinstance(profile.get("links"), dict) else {}
+    address = _usable_profile_value(profile.get("address") or profile.get("location"))
+    city, state_name = "", ""
+    if address:
+        address_parts = [x.strip() for x in address.split(",") if x.strip()]
+        city = address_parts[0] if address_parts else address
+        state_name = address_parts[1] if len(address_parts) > 1 else ""
+
+    # High-school answers must never be inferred from a university name/year.
+    if "high school" in label:
+        if "graduat" in label or "year" in label:
+            return (_usable_profile_value(profile.get("high_school_graduation"))
+                    or _usable_profile_value(profile.get("high_school_graduation_year")))
+        return _usable_profile_value(profile.get("high_school"))
+
+    if re.search(r"\b(first|given)[ _-]*name\b|given-name", label):
+        return first
+    if re.search(r"\b(last|family|sur)[ _-]*name\b|family-name", label):
+        return last
+    if (re.search(r"\b(full[ _-]*)?name\b", label)
+            and not re.search(r"company|school|employer|user", label)):
+        return name
+    mappings = (
+        (r"e-?mail", profile.get("email")),
+        (r"phone|mobile|telephone|\btel\b", profile.get("phone")),
+        (r"linkedin", profile.get("linkedin") or links.get("linkedin")),
+        (r"github", profile.get("github") or links.get("github")),
+        (r"portfolio|personal website|website url", profile.get("portfolio") or links.get("portfolio")),
+        (r"\b(city|locality)\b", profile.get("city") or city),
+        (r"\b(state|province|region)\b", profile.get("state") or state_name),
+        (r"zip|postal", profile.get("zip") or profile.get("postal_code")),
+        (r"\bcountry\b", profile.get("country")),
+        (r"street|address", address),
+        (r"school|college|university", profile.get("school") or profile.get("university")),
+        (r"\bdegree\b", profile.get("degree")),
+        (r"graduat", profile.get("graduation_year") or profile.get("graduation")
+         or _profile_year(profile.get("education"))),
+        (r"current company|employer|organization", profile.get("company")),
+        (r"job title|current title", profile.get("title")),
+        (r"cover letter", profile.get("cover_letter")),
+    )
+    for pattern, value in mappings:
+        if re.search(pattern, label):
+            usable = _usable_profile_value(value)
+            if usable:
+                return usable
+    try:
+        import profile_store
+        return _usable_profile_value(profile_store.application_answer(
+            el.get("question") or el.get("label") or ""))
+    except Exception:
+        return ""
+
+
+async def linkedin_search_jobs(args: dict) -> str:
+    """Search the user's signed-in LinkedIn UI and return actual visible job results."""
+    try:
+        keywords = str(args.get("keywords") or "").strip()
+        location = str(args.get("location") or "").strip()
+        if not keywords:
+            return "Error: keywords are required."
+        max_results = max(1, min(50, int(args.get("max_results", 20))))
+        params = {"keywords": keywords}
+        if location:
+            params["location"] = location
+        if bool(args.get("easy_apply_only")):
+            params["f_AL"] = "true"
+        if bool(args.get("remote_only")):
+            params["f_WT"] = "2"
+        search_url = "https://www.linkedin.com/jobs/search/?" + urlencode(params)
+
+        await _ctx()
+        page = next((p for p in (_context.pages if _context else [])
+                     if "linkedin.com/jobs" in p.url.lower()), None)
+        if page is None:
+            page = await _context.new_page()
+            _owned_pages.add(page)
+        await _select_page(page)
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        await _settle(page)
+        if await _challenge_on(page):
+            return CHALLENGE_MSG
+        _remember_source(page.url)
+
+        results = await page.evaluate(
+            """(limit) => {
+              const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+              const anchors = Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'));
+              const seen = new Set(), out = [];
+              for (const a of anchors) {
+                const match = a.href.match(/\/jobs\/view\/(\d+)/);
+                if (!match || seen.has(match[1])) continue;
+                seen.add(match[1]);
+                const card = a.closest('li, [data-job-id], .job-card-container, .jobs-search-results__list-item') || a.parentElement;
+                const lines = clean(card ? card.innerText : a.innerText).split(/\\n| · /).map(clean).filter(Boolean);
+                const title = clean(a.innerText || a.getAttribute('aria-label')) || lines[0] || '';
+                const companyNode = card && card.querySelector('.job-card-container__primary-description, .artdeco-entity-lockup__subtitle, [class*="company-name"]');
+                const locationNode = card && card.querySelector('.job-card-container__metadata-item, .artdeco-entity-lockup__caption, [class*="job-location"]');
+                out.push({job_id: match[1], title: title.slice(0, 180),
+                  company: clean(companyNode && companyNode.innerText).slice(0, 180),
+                  location: clean(locationNode && locationNode.innerText).slice(0, 180),
+                  url: 'https://www.linkedin.com/jobs/view/' + match[1] + '/',
+                  card_text: lines.slice(0, 8).join(' | ').slice(0, 700)});
+                if (out.length >= limit) break;
+              }
+              return out;
+            }""", max_results)
+        if not results:
+            body = (await page.locator("body").inner_text(timeout=10000))[:1800]
+            _audit("linkedin_search", {"keywords": keywords, "location": location,
+                                        "results": 0, "url": page.url}, ok=False)
+            return ("No LinkedIn job cards were available in the signed-in page. "
+                    "LinkedIn may require sign-in, show a verification step, or have no matches. "
+                    f"Visible page text: {body}")
+
+        for job in results:
+            _remember_source(job["url"])
+        artifact = ""
+        if _task is not None:
+            config.ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+            path = config.ARTIFACT_DIR / f"task_{_task.id}_linkedin_jobs.csv"
+            with path.open("w", newline="", encoding="utf-8-sig") as fh:
+                writer = csv.DictWriter(fh, fieldnames=list(results[0].keys()))
+                writer.writeheader()
+                writer.writerows(results)
+            _remember_artifact(path)
+            artifact = str(path)
+        _audit("linkedin_search", {"keywords": keywords, "location": location,
+                                    "results": len(results), "url": page.url}, ok=True)
+        return json.dumps({"search_url": page.url, "count": len(results),
+                           "jobs": results, "artifact": artifact}, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: LinkedIn job search failed: {e}"
+
+
+async def open_job_application(args: dict) -> str:
+    """Open, but never submit, the application attached to a real job page."""
+    try:
+        url = str(args.get("url") or "").strip()
+        if url:
+            opened = await browser_goto({"url": url})
+            if opened.startswith("Error") or opened.startswith("STOP"):
+                return opened
+        page = await _ctx()
+        await _settle(page)
+        if await _challenge_on(page):
+            return CHALLENGE_MSG
+        open_dialog = page.locator('dialog[open], [role="dialog"]')
+        if await open_dialog.count() and await open_dialog.first.is_visible():
+            dialog_text = (await open_dialog.first.inner_text())[:500]
+            if re.search(r"\bapply\s+to\b|\bapplication\b", dialog_text, re.I):
+                _audit("job_application_already_open", {"url": page.url}, ok=True)
+                return "Application is already open; nothing was submitted.\n" + await _fresh_digest()
+        await _extract()
+        candidates = [(field_id, el) for field_id, el in _last.items()
+                      if gate.is_application_entry_click(el)]
+        if not candidates and "linkedin.com/jobs" in page.url.lower():
+            # LinkedIn relabels Easy Apply as Continue after it saves an
+            # in-progress draft. This remains an entry action, not submission.
+            candidates = [(field_id, el) for field_id, el in _last.items()
+                          if not el.get("in_form") and
+                          any(re.fullmatch(r"\s*continue\s*", str(el.get(k) or ""), re.I)
+                              for k in ("text", "label", "aria_label"))]
+        if not candidates:
+            return ("No reversible Apply/Easy Apply entry control is visible on this job page. "
+                    "It may already be in the application, the posting may be closed, or the "
+                    "control may require the user to sign in. Current page: " + page.url)
+        easy = [item for item in candidates if re.search(r"easy\s+apply", " ".join(
+            str(item[1].get(k) or "") for k in ("text", "label", "aria_label")), re.I)]
+        selected = (easy or candidates)[0]
+        before_pages = set(_context.pages if _context else [])
+        result = await click_element({"field_id": selected[0]})
+        # LinkedIn sometimes opens its modal during the first click attempt, then
+        # leaves the covered trigger waiting until Playwright times out. Verify the
+        # resulting application dialog instead of believing that false negative.
+        dialog_opened = False
+        open_dialog = page.locator('dialog[open], [role="dialog"]')
+        if await open_dialog.count() and await open_dialog.first.is_visible():
+            dialog_text = (await open_dialog.first.inner_text())[:500]
+            dialog_opened = bool(re.search(r"\bapply\s+to\b|\bapplication\b", dialog_text, re.I))
+        if result.startswith(("Error", "User DENIED")) and not dialog_opened:
+            return result
+        await page.wait_for_timeout(800)
+        new_pages = [p for p in (_context.pages if _context else []) if p not in before_pages]
+        if new_pages:
+            next_page = new_pages[-1]
+            _owned_pages.add(next_page)
+            await _select_page(next_page)
+            await _settle(next_page)
+        _remember_source(_page.url)
+        _audit("job_application_opened", {"url": _page.url,
+                                           "control": selected[1].get("label")}, ok=True)
+        return "Application opened; nothing was submitted.\n" + await _fresh_digest()
+    except Exception as e:
+        return f"Error: could not open the job application: {e}"
+
+
+async def autofill_application(args: dict) -> str:
+    """Fill common application fields from saved facts and attach the saved resume."""
+    try:
+        import tools_fs
+        profile = tools_fs.load_profile_data()
+        if not profile:
+            return "Error: profile.yaml has no usable profile data."
+        page = await _ctx()
+        await _settle(page)
+        if await _challenge_on(page):
+            return CHALLENGE_MSG
+        elements, _, _ = await _extract()
+        filled, uploaded, selected_choices, missing, errors = [], [], [], [], []
+        # Scope to a modal only when that modal actually contains application
+        # fields. Cookie/privacy dialogs also use role=dialog and previously made
+        # Jerry ignore the real Lever form behind them.
+        dialog_open = any(
+            el.get("scope") == "dialog"
+            and el.get("tag") in ("input", "select", "textarea")
+            and (el.get("type") or "").lower() not in ("hidden", "button", "submit")
+            for el in elements
+        )
+
+        resume_candidates = []
+        if _task is not None:
+            resume_candidates.extend(reversed(_task.attachments))
+        resume_candidates.extend([
+            _usable_profile_value(profile.get("resume_path")),
+            _usable_profile_value(profile.get("last_upload")),
+        ])
+        resume_path = next((Path(p) for p in resume_candidates
+                            if p and Path(p).is_file() and Path(p).suffix.lower() in
+                            {".pdf", ".doc", ".docx"}), None)
+
+        for el in elements:
+            if dialog_open and el.get("scope") != "dialog":
+                continue
+            tag = (el.get("tag") or "").lower()
+            typ = (el.get("type") or "").lower()
+            if tag not in ("input", "select", "textarea") or typ in {
+                    "hidden", "submit", "button", "reset", "password", "radio", "checkbox"}:
+                continue
+            label = (el.get("question") or el.get("label") or el.get("name") or el["id"]).strip()
+            frame = _frame_for(el)
+            loc = _control_locator(frame, el, el["id"])
+            if typ != "file" and not await loc.is_visible():
+                continue
+            if typ == "file":
+                if re.search(r"resume|curriculum|\bcv\b", label, re.I) and resume_path:
+                    try:
+                        await loc.set_input_files(str(resume_path), timeout=15000)
+                        uploaded.append({"field": label, "file": resume_path.name})
+                        _audit("upload", {"field": el["id"], "label": label,
+                                          "file": resume_path.name}, ok=True)
+                    except Exception as exc:
+                        errors.append({"field": label, "error": str(exc)})
+                elif el.get("required"):
+                    missing.append({"field_id": el["id"], "label": label, "type": "file"})
+                continue
+            if el.get("value"):
+                continue
+            value = _profile_value_for_field(profile, el)
+            if not value:
+                if el.get("required"):
+                    missing.append({"field_id": el["id"], "label": label, "type": typ or tag,
+                                    "options": el.get("options") or ""})
+                continue
+            try:
+                if tag == "select":
+                    options = await loc.locator("option").evaluate_all(
+                        """options => options.map((o, index) => ({
+                          index, label: String(o.label || o.textContent || '').trim(),
+                          value: String(o.value || '')
+                        }))""")
+                    wanted = _semantic_norm(value)
+                    exact = [item for item in options
+                             if _semantic_norm(item["label"]) == wanted
+                             or _semantic_norm(item["value"]) == wanted]
+                    if len(exact) != 1:
+                        if el.get("required"):
+                            missing.append({"field_id": el["id"], "label": label,
+                                            "type": "select",
+                                            "options": [x["label"] for x in options[:60]]})
+                        continue
+                    await loc.select_option(index=exact[0]["index"], timeout=8000)
+                else:
+                    await loc.fill(value, timeout=10000)
+                filled.append({"field": label, "value": value})
+                _audit("autofill", {"field": el["id"], "label": label, "value": value}, ok=True)
+            except Exception as exc:
+                errors.append({"field": label, "value": value, "error": str(exc)})
+
+        await page.wait_for_timeout(400)
+        # Autocomplete widgets and React fields can rerender the rest of the
+        # form while text is filled. Refresh Jerry's ids before choice controls.
+        elements, _, _ = await _extract()
+        # Select radio/checkbox answers only when a saved answer maps to this exact
+        # question. Repeated Yes/No labels are never matched across groups.
+        import profile_store
+        choice_groups: dict[tuple, list[dict]] = {}
+        for el in elements:
+            if dialog_open and el.get("scope") != "dialog":
+                continue
+            typ = (el.get("type") or "").lower()
+            if typ not in ("radio", "checkbox"):
+                continue
+            question = (el.get("question") or el.get("label") or "Choice required").strip()
+            key = (el.get("frame_index", 0), el.get("name") or question)
+            choice_groups.setdefault(key, []).append(el)
+
+        for group in choice_groups.values():
+            question = (group[0].get("question") or group[0].get("label")
+                        or "Choice required").strip()
+            typ = (group[0].get("type") or "").lower()
+            visible = False
+            for candidate in group:
+                clickable, native = await _clickable_control(
+                    _frame_for(candidate), candidate, candidate["id"])
+                if await clickable.is_visible() or await native.is_visible():
+                    visible = True
+                    break
+            if not visible:
+                continue
+
+            answers = _profile_choice_values_for_question(profile, question)
+            remembered = profile_store.application_answer(question)
+            if remembered:
+                answers.append(remembered)
+            matches = []
+            for candidate in group:
+                option = str(candidate.get("label") or candidate.get("value") or "").strip()
+                if option and any(_answer_matches_option(answer, option) for answer in answers):
+                    matches.append(candidate)
+            if typ == "radio" and len(matches) != 1:
+                matches = []
+
+            for candidate in matches:
+                option = str(candidate.get("label") or candidate.get("value") or "").strip()
+                try:
+                    clickable, native = await _clickable_control(
+                        _frame_for(candidate), candidate, candidate["id"])
+                    if not await native.is_checked():
+                        await _set_choice_state(
+                            _frame_for(candidate), candidate, candidate["id"], True)
+                    await page.wait_for_timeout(150)
+                    if not await native.is_checked():
+                        raise RuntimeError("control did not report checked after selection")
+                    selected_choices.append({"field": question, "option": option, "type": typ})
+                    _audit("autofill_choice", {"field": candidate["id"],
+                                                "question": question,
+                                                "option": option}, ok=True)
+                except Exception as exc:
+                    errors.append({"field": question, "option": option, "error": str(exc)})
+
+            checked_now = []
+            for candidate in group:
+                native = _control_locator(_frame_for(candidate), candidate, candidate["id"])
+                if await native.is_checked():
+                    checked_now.append(candidate)
+            if checked_now:
+                continue
+            options = [x.get("label") or x.get("value") for x in group]
+            missing.append({
+                "field_id": group[0]["id"],
+                "label": question,
+                "type": typ,
+                "required": any(bool(x.get("required")) for x in group),
+                "options": [x for x in options if x][:60],
+            })
+        actions = []
+        for el in elements:
+            if dialog_open and el.get("scope") != "dialog":
+                continue
+            if el.get("tag") not in ("button", "a"):
+                continue
+            label = (el.get("text") or el.get("label") or el.get("aria_label") or "").strip()
+            if not re.search(r"\b(next|continue|review|submit application|send application)\b", label, re.I):
+                continue
+            loc = _control_locator(_frame_for(el), el, el["id"])
+            if await loc.is_visible():
+                actions.append({"field_id": el["id"], "label": label,
+                                "requires_approval": gate.is_irreversible_click(el)})
+        _audit("application_autofill", {"filled": len(filled), "uploaded": len(uploaded),
+                                        "selected": len(selected_choices),
+                                        "missing": len(missing), "errors": len(errors)},
+               ok=not errors)
+        return json.dumps({"page": page.url, "submitted": False, "filled": filled,
+                           "uploaded": uploaded, "selected": selected_choices,
+                           "missing": missing[:60],
+                           "errors": errors[:20], "actions": actions[:20]}, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: application autofill failed: {e}"
 
 
 # --- tool registry ---
@@ -1468,14 +2473,15 @@ TOOLS = {
             "type": "function",
             "function": {
                 "name": "select_option",
-                "description": "Choose an option in a <select> dropdown by its visible label (falls back to value).",
+                "description": "Choose and verify an exact option in a native <select> dropdown. Identify it by field_id or by its visible question text.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "field_id": {"type": "string", "description": "Element id from the digest, e.g. e5"},
+                        "question": {"type": "string", "description": "Visible dropdown question/label; use when field_id is unavailable"},
                         "option": {"type": "string", "description": "Option label (or value) to select"},
                     },
-                    "required": ["field_id", "option"],
+                    "required": ["option"],
                 },
             },
         },
@@ -1576,9 +2582,30 @@ def _simple_tool(name: str, description: str, properties=None, required=None, fn
 
 
 TOOLS.update({
+    "linkedin_search_jobs": _simple_tool(
+        "linkedin_search_jobs",
+        "Search real job listings through the user's signed-in LinkedIn Edge session and return sourced results plus a CSV. Use this instead of generic web search for LinkedIn jobs.",
+        {"keywords": {"type": "string"},
+         "location": {"type": "string"},
+         "remote_only": {"type": "boolean"},
+         "easy_apply_only": {"type": "boolean"},
+         "max_results": {"type": "integer", "description": "1 to 50"}},
+        ["keywords"], linkedin_search_jobs),
+    "open_job_application": _simple_tool(
+        "open_job_application",
+        "Open the Apply or Easy Apply flow for a real job page without submitting it. This reversible entry action does not require final-submit approval.",
+        {"url": {"type": "string", "description": "Optional LinkedIn or employer job URL"}},
+        [], open_job_application),
+    "autofill_application": _simple_tool(
+        "autofill_application",
+        "Fill common fields from Jerry's saved profile and attach the saved/uploaded resume. Never submits; returns every missing choice or fact that must be answered.",
+        {}, [], autofill_application),
     "browser_back": _simple_tool("browser_back", "Go back in the current tab and read it.", fn=browser_back),
     "browser_forward": _simple_tool("browser_forward", "Go forward in the current tab and read it.", fn=browser_forward),
-    "reload_page": _simple_tool("reload_page", "Reload the current page and read it.", fn=reload_page),
+    "reload_page": _simple_tool(
+        "reload_page",
+        "Emergency recovery only: reload after repeated browser-action failures prove the page is stuck. Never use after CAPTCHA/manual verification or during a partially filled form; re-read the current DOM instead.",
+        fn=reload_page),
     "scroll_page": _simple_tool(
         "scroll_page", "Scroll vertically; use a negative amount to scroll up.",
         {"amount": {"type": "integer", "description": "Pixels, from -4000 to 4000"}},
@@ -1619,6 +2646,12 @@ TOOLS.update({
                     "description": "auto uses CSV for rows and JSON for nested data"},
          "max_items": {"type": "integer", "description": "Maximum 200"}},
         ["mode"], scrape_page),
+    "scrape_instagram_posts": _simple_tool(
+        "scrape_instagram_posts",
+        "Read visible Instagram feed/profile posts and reels with exact /p/ or /reel/ links, usernames, timestamps, and visible captions. Use this before generic scraping or vision; it never likes, follows, messages, or posts.",
+        {"max_posts": {"type": "integer", "description": "1 to 30, default 10"},
+         "scrolls": {"type": "integer", "description": "Optional 0 to 4 controlled feed scrolls"}},
+        [], scrape_instagram_posts),
     "visual_inspect": _simple_tool(
         "visual_inspect", "Use the local vision model to locate a visual-only control. Never use on CAPTCHA or verification challenges.",
         {"target": {"type": "string", "description": "Precise description of the control"}},
@@ -1627,12 +2660,15 @@ TOOLS.update({
         "visual_click", "Click the validated target from visual_inspect. Opaque targets require Telegram approval.",
         {}, [], visual_click),
     "find_elements": _simple_tool(
-        "find_elements", "Search every extracted control by label/text/name, including controls omitted from a truncated digest.",
+        "find_elements", "Search every extracted control by question/label/text/name, including controls omitted from a truncated digest.",
         {"query": {"type": "string"},
          "group": {"type": "string", "description": "Optional exact radio/input group name"}},
         [], find_elements),
     "choose_option": _simple_tool(
-        "choose_option", "Select a radio/checkbox choice by semantic label and optional group name, then verify it is checked. Returns available choices instead of guessing when absent or ambiguous.",
-        {"label": {"type": "string"}, "group": {"type": "string"}},
+        "choose_option", "Select or clear an exact radio/checkbox choice scoped to its visible question, then verify its state. Always provide question for repeated labels such as Yes/No.",
+        {"label": {"type": "string"},
+         "question": {"type": "string", "description": "Visible question containing the choice"},
+         "group": {"type": "string", "description": "Optional exact input group name"},
+         "selected": {"type": "boolean", "description": "True to check/select (default); false to clear a checkbox"}},
         ["label"], choose_option),
 })

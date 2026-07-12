@@ -7,6 +7,7 @@ Reddit and YouTube each have a free, official, read-only API, so they get
 first-class tools instead of scraping. One-time setup: see SOCIAL_SETUP.md.
 """
 import asyncio
+import html
 
 import config
 
@@ -49,7 +50,7 @@ def _youtube():
 
 def _one_line(s, limit: int) -> str:
     """Collapse whitespace to a single line and trim to limit chars."""
-    s = " ".join(str(s).split())
+    s = " ".join(html.unescape(str(s)).split())
     return s[:limit] + "…" if len(s) > limit else s
 
 

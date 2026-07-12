@@ -1,4 +1,4 @@
-# Pocket Agent — Phase 2 Build Plan (self-contained; written for a fresh Claude/Opus session)
+# Jerry Pocket Agent — Phase 2 Build Plan (self-contained; written for a fresh Claude/Opus session)
 
 Read this top to bottom before writing code. Every claim about current state below is
 grounded in the code in this repo and in live testing done on 2026-07-03/10 — not in
@@ -6,7 +6,7 @@ intentions. Where something is unverified, it says so.
 
 ## 1. What this project is
 
-Local-first agentic AI ("Pocket Agent") on the user's Windows 11 PC (RTX 5080 16GB,
+Local-first agentic AI ("Jerry Pocket Agent") on the user's Windows 11 PC (RTX 5080 16GB,
 31GB RAM, Python 3.11). Reasoning runs entirely on a local model — **no OpenAI/Anthropic
 API anywhere in the loop**. The user controls it from their phone via a Telegram bot
 (@JerryAAHK_bot) and from a floating "J" badge extension in Edge. Hackathon demo project;
@@ -117,7 +117,7 @@ python-telegram-bot 22.8, Playwright async (headed Chromium), aiohttp (J-badge e
 ### P0.1 — Co-drive launcher (`edge_codrive.bat`, new file)
 One double-clickable script: warn/confirm → `taskkill /IM msedge.exe` if running →
 relaunch `msedge.exe --remote-debugging-port=9222 --restore-last-session` with the
-user's DEFAULT profile (no --user-data-dir override). Echo "Pocket Agent can now
+user's DEFAULT profile (no --user-data-dir override). Echo "Jerry Pocket Agent can now
 co-drive this browser." Acceptance: after running it, `curl http://127.0.0.1:9222/json/version`
 returns JSON.
 

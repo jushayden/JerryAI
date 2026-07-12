@@ -14,7 +14,15 @@ SUBMIT_WORDS = re.compile(
 
 HIGH_IMPACT_TYPES = {"submit"}
 
-_MAX_FIELD_LINES = 40  # job applications can be long; show the user everything being submitted
+# Reversible controls which enter an application flow. Keep this deliberately
+# narrow: a final "Submit application" control does not match.
+APPLICATION_ENTRY_WORDS = re.compile(
+    r"^\s*(easy\s+apply|apply|apply\s+now|continue\s+to\s+application|"
+    r"apply\s+on\s+(?:company|employer)\s+(?:site|website))\s*$",
+    re.I,
+)
+
+_MAX_FIELD_LINES = 24
 
 
 def is_irreversible_click(el: dict) -> bool:
@@ -42,28 +50,41 @@ def is_irreversible_click(el: dict) -> bool:
     return False
 
 
+def is_application_entry_click(el: dict) -> bool:
+    """True only for a reversible control that opens an application flow."""
+    if el.get("in_form"):
+        return False
+    typ = (el.get("type") or "").lower()
+    if typ in HIGH_IMPACT_TYPES:
+        return False
+    labels = [str(el.get(k) or "").strip() for k in ("text", "aria_label", "label")]
+    return any(APPLICATION_ENTRY_WORDS.fullmatch(" ".join(label.split())) for label in labels if label)
+
+
 def summarize_submission(el: dict, form_values: list[str]) -> str:
     """Human-readable approval-card body for a gated click.
 
-    form_values: pre-formatted "field = value" strings. Capped ~15 lines.
+    form_values: pre-formatted "field = value" strings. Important values appear first.
     """
     label = (el.get("text") or el.get("aria_label") or el.get("label") or "").strip()
     if not label:
         label = el.get("tag") or "element"
     page = el.get("page") or el.get("url") or "this page"
 
-    lines = [f'High-impact action: click "{label}"', f"Page/domain: {page}"]
+    lines = [f"Action: {label}", f"Site: {page}"]
     if form_values:
         important = [v for v in form_values if re.search(
             r"recipient|email|phone|amount|price|total|currency|date|time|destination|address|account",
             v, re.I)]
-        if important:
-            lines.append("Important details:")
-            lines.extend(f"  {v}" for v in important[:12])
-        lines.append("Form contains:")
-        for v in form_values[:_MAX_FIELD_LINES]:
-            lines.append(f"  {v}")
-        hidden = len(form_values) - _MAX_FIELD_LINES
+        ordered = important + [v for v in form_values if v not in important]
+        unique: list[str] = []
+        for value in ordered:
+            if value not in unique:
+                unique.append(value)
+        lines.append("Includes:")
+        for value in unique[:_MAX_FIELD_LINES]:
+            lines.append(f"  {value}")
+        hidden = len(unique) - _MAX_FIELD_LINES
         if hidden > 0:
-            lines.append(f"  …and {hidden} more fields")
+            lines.append(f"  …and {hidden} more completed fields")
     return "\n".join(lines)
