@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from config import Config
+    from gate import Gate
+    from job_store import JobStore
     from social.base import SocialAdapter
     from state import CooldownStore, EventLog, SearchCache
 
@@ -44,6 +46,8 @@ class ToolContext:
     adapters: dict[str, "SocialAdapter"] = field(default_factory=dict)
     task_id: str = ""
     pre_authorized: bool = False
+    job_store: "JobStore | None" = None
+    gate: "Gate | None" = None
 
 
 def _safe_print(text: str) -> None:

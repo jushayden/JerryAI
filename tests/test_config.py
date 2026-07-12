@@ -3,11 +3,11 @@ from config import load_config, load_profile, platform_status
 
 def test_empty_env_all_platforms_unavailable(tmp_config):
     status = platform_status(tmp_config)
-    assert set(status) == {"x", "reddit", "youtube", "instagram"}
+    assert set(status) == {"x", "youtube", "instagram"}
     for platform, (ready, reason) in status.items():
         assert ready is False, platform
         assert reason  # every unavailable platform explains itself
-    assert "SOCIAL_SETUP.md" in status["reddit"][1]
+    assert "SOCIAL_SETUP.md" in status["youtube"][1]
     assert "setup_instagram.py" in status["instagram"][1]
 
 
@@ -26,14 +26,10 @@ def test_dirs_created(tmp_config):
 
 def test_env_vars_read(tmp_path, clean_env, monkeypatch):
     monkeypatch.setenv("TELEGRAM_OWNER_ID", "12345")
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "abc")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "def")
-    monkeypatch.setenv("REDDIT_USER_AGENT", "test-agent")
     monkeypatch.setenv("YOUTUBE_API_KEY", "ytkey")
     cfg = load_config(env_file=tmp_path / "none.env", root=tmp_path)
     assert cfg.telegram_owner_id == 12345
     status = platform_status(cfg)
-    assert status["reddit"][0] is True
     assert status["youtube"][0] is True
     assert status["x"][0] is False
 

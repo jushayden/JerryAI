@@ -61,12 +61,13 @@ In Telegram:
 | `send_social_digest` (formatted results + thumbnails to Telegram) | no |
 | `fs_read_file` / `fs_write_file` / `fs_list_dir` (sandboxed to `workspace/`) | no |
 | `fs_delete` | **yes** |
-| `browser_extract` / `browser_screenshot` | no |
+| `web_search` (DuckDuckGo) / `browser_extract` / `browser_screenshot` | no |
 | `browser_fill_and_submit` | **yes** |
+| `apply_to_job` (browser-use; approval card fires before the final submit) | **yes — at submit** |
 
 Platform coverage:
 
-- **Reddit** — search, feed (your subreddits from `profile.yaml`), profile, post (needs username/password creds).
+- **Web** — general search via DuckDuckGo (`web_search`) + page reading (`browser_extract`); no API key needed.
 - **YouTube** — search, trending feed, channel profiles. Read-only.
 - **X/Twitter** — post + profile via the official API **free tier**. Search and
   timelines need the paid Basic tier and will say so instead of failing silently.
@@ -90,7 +91,7 @@ $env:RUN_LIVE_TESTS = '1'; .venv\Scripts\python -m pytest tests\live  # real API
   when you request them. If Instagram challenges the session the agent stops
   immediately, sends you a screenshot, and **never retries** — you re-login
   manually with `setup_instagram.py`.
-- **X free tier cannot search.** Either pay for Basic or use Reddit/YouTube
+- **X free tier cannot search.** Either pay for Basic or use web_search/YouTube
   for search; the agent tells you which path it can take.
 - **DOM scrapers break when platforms redesign.** Policy: fail loudly with a
   screenshot sent to your phone ("layout may have changed"), never guess.

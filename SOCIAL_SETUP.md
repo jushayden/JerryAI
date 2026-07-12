@@ -11,17 +11,10 @@ it to use one. Check readiness anytime with `python main.py --status`.
    `TELEGRAM_OWNER_ID` in `.env`. Only this account can command the bot.
 4. Open a chat with your new bot and press Start once.
 
-## Reddit (free, reliable — recommended first platform)
+## Web search (nothing to set up)
 
-1. Go to <https://www.reddit.com/prefs/apps> → **create another app…**
-2. Type: **script**. Name: anything. Redirect URI: `http://localhost:8080`.
-3. Copy the values into `.env`:
-   - `REDDIT_CLIENT_ID` — the string under the app name
-   - `REDDIT_CLIENT_SECRET` — the "secret" field
-   - `REDDIT_USER_AGENT` — e.g. `windows:jerryai:v0.1 (by /u/yourname)`
-4. Optional, only if you want the agent to be able to **post** to Reddit:
-   `REDDIT_USERNAME` and `REDDIT_PASSWORD`. Posts use the format
-   `r/subreddit: title | body` and always require an approval card.
+General web search (`web_search`) uses DuckDuckGo's HTML endpoint through the
+built-in browser — no account, no API key. It just works.
 
 ## YouTube (free, read-only)
 

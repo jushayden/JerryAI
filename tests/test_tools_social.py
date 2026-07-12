@@ -47,7 +47,7 @@ async def test_search_returns_normalized_json(tool_ctx):
 
 async def test_unknown_platform(tool_ctx):
     out = await social_search(tool_ctx, "myspace", "tesla")
-    assert "unknown platform" in out and "reddit" in out
+    assert "unknown platform" in out and "youtube" in out
 
 
 async def test_unavailable_platform_friendly_message(tool_ctx):

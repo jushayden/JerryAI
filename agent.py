@@ -12,14 +12,14 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
 
 import ollama
 
 from config import Config
 from gate import Gate
-from notify import Notifier, ToolContext
+from notify import ToolContext
 from state import EventLog
 
 TOOL_TIMEOUT_S = 120
@@ -54,6 +54,7 @@ class ToolSpec:
     func: Callable[..., Awaitable[str]]  # async, returns a string ALWAYS
     schema: dict  # {"type": "function", "function": {...}}
     gated: bool = False
+    timeout_s: int | None = None  # None = use the module default TOOL_TIMEOUT_S
 
 
 class ToolRegistry:
@@ -185,10 +186,16 @@ short final answer.
 
 Rules:
 - Call tools with valid arguments; use one tool at a time when unsure.
+- For questions about facts, news, current events, or anything you are not sure about, \
+use web_search, then browser_extract on the most promising result link to read it. \
+Answer directly from your own knowledge only for stable general concepts.
 - For social media searches use social_search; for the owner's feeds use social_get_feed.
 - After gathering social results, use send_social_digest to deliver them nicely.
 - If a tool returns an ERROR or says a platform is not set up, tell the owner plainly — do not retry the same call.
 - Posting and deleting require owner approval; if a result says DENIED, accept it and report back.
+- For job applications, use apply_to_job with the posting URL — it fills the form itself using \
+the applicant profile and asks the owner to approve before actually submitting; it may take \
+several minutes. Do not call it more than once for the same URL.
 - Keep final answers short and factual.{profile}"""
 
 
@@ -296,13 +303,14 @@ class Agent:
                 return "DENIED: approval timed out — the action was cancelled."
             return "DENIED by owner: do not retry this action; report back instead."
 
+        timeout_s = spec.timeout_s or TOOL_TIMEOUT_S
         try:
             result = await asyncio.wait_for(
-                spec.func(ctx, **call.arguments), timeout=TOOL_TIMEOUT_S
+                spec.func(ctx, **call.arguments), timeout=timeout_s
             )
         except asyncio.TimeoutError:
             self.log.append("error", task_id=ctx.task_id, tool=call.name, err="timeout")
-            result = f"ERROR: {call.name} timed out after {TOOL_TIMEOUT_S}s"
+            result = f"ERROR: {call.name} timed out after {timeout_s}s"
         except TypeError as e:
             # bad/missing arguments from the model — recoverable
             self.log.append("error", task_id=ctx.task_id, tool=call.name, err=str(e))

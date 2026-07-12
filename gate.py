@@ -60,6 +60,32 @@ class Gate:
     def is_gated(tool_name: str) -> bool:
         return tool_name in GATED_TOOLS
 
+    async def _request_approval(self, *, tool_name: str, platform: str, action: str,
+                                payload: str, ctx: ToolContext, timeout_s: int,
+                                log_args: dict | None) -> tuple[bool, Reason]:
+        """Shared request+log flow used by both check() and check_custom()."""
+        self.log.append("approval_requested", task_id=ctx.task_id, tool=tool_name,
+                        platform=platform, payload=payload)
+        verdict = await self.approver.request_approval(
+            platform=platform, action=action, payload_text=payload,
+            meta={"tool": tool_name, "task_id": ctx.task_id,
+                 **({"args": log_args} if log_args is not None else {})},
+            timeout_s=timeout_s,
+        )
+        if verdict is True:
+            reason: Reason = "owner_approved"
+        elif verdict is False:
+            reason = "owner_denied"
+        else:
+            reason = "timeout"
+        allowed = verdict is True
+        self.log.append("approval_resolved", task_id=ctx.task_id, tool=tool_name,
+                        allowed=allowed, reason=reason)
+        extra = {"args": log_args} if log_args is not None else {}
+        self.log.append("gate_decision", task_id=ctx.task_id, tool=tool_name,
+                        allowed=allowed, reason=reason, **extra)
+        return allowed, reason
+
     async def check(self, tool_name: str, args: dict, ctx: ToolContext) -> GateDecision:
         if not self.is_gated(tool_name):
             self.log.append("gate_decision", task_id=ctx.task_id, tool=tool_name,
@@ -72,27 +98,30 @@ class Gate:
             return GateDecision(True, "pre_authorized")
 
         platform, action, payload = build_card_text(tool_name, args)
-        self.log.append("approval_requested", task_id=ctx.task_id, tool=tool_name,
-                        platform=platform, payload=payload)
-        verdict = await self.approver.request_approval(
-            platform=platform,
-            action=action,
-            payload_text=payload,
-            meta={"tool": tool_name, "args": args, "task_id": ctx.task_id},
-            timeout_s=self.timeout_s,
+        allowed, reason = await self._request_approval(
+            tool_name=tool_name, platform=platform, action=action, payload=payload,
+            ctx=ctx, timeout_s=self.timeout_s, log_args=args,
         )
-        if verdict is True:
-            reason: Reason = "owner_approved"
-        elif verdict is False:
-            reason = "owner_denied"
-        else:
-            reason = "timeout"
-        allowed = verdict is True
-        self.log.append("approval_resolved", task_id=ctx.task_id, tool=tool_name,
-                        allowed=allowed, reason=reason)
-        self.log.append("gate_decision", task_id=ctx.task_id, tool=tool_name,
-                        allowed=allowed, reason=reason, args=args)
         return GateDecision(allowed, reason)
+
+    async def check_custom(self, action_label: str, payload_text: str, ctx: ToolContext,
+                           timeout_s: int | None = None) -> bool:
+        """For actions with no ToolSpec of their own — e.g. a callback fired from
+        inside a nested agent (browser-use's own reasoning loop) — that must
+        ALWAYS request approval. No is_gated table lookup, and deliberately no
+        `pre_authorized` bypass either: this is for consequential one-shot
+        actions (e.g. actually submitting a job application) where even a
+        `!`-prefixed task must not skip the final human checkpoint.
+
+        Callers must pass an already-redacted `payload_text` — this method
+        does not know how to redact sensitive values, and (unlike `check()`)
+        never logs a raw `args` dict, only the caller-provided text."""
+        allowed, _reason = await self._request_approval(
+            tool_name=action_label, platform="custom", action=action_label,
+            payload=payload_text, ctx=ctx, timeout_s=timeout_s or self.timeout_s,
+            log_args=None,
+        )
+        return allowed
 
 
 def card_html(action: str, platform: str, payload: str) -> str:

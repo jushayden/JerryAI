@@ -34,11 +34,6 @@ class Config:
     x_api_secret: str | None
     x_access_token: str | None
     x_access_token_secret: str | None
-    reddit_client_id: str | None
-    reddit_client_secret: str | None
-    reddit_user_agent: str | None
-    reddit_username: str | None
-    reddit_password: str | None
     youtube_api_key: str | None
     project_root: Path
     workspace_dir: Path
@@ -49,6 +44,8 @@ class Config:
     max_agent_iterations: int = 12
     instagram_actions_per_hour: int = 30
     instagram_min_delay_s: tuple[float, float] = (4.0, 9.0)
+    browser_use_dry_run: bool = False
+    apply_to_job_max_steps: int = 40
 
 
 def load_config(env_file: str | Path | None = None, root: Path | None = None) -> Config:
@@ -66,6 +63,12 @@ def load_config(env_file: str | Path | None = None, root: Path | None = None) ->
     except ValueError:
         num_ctx = 8192
 
+    try:
+        apply_max_steps = int(_opt("APPLY_TO_JOB_MAX_STEPS") or 40)
+    except ValueError:
+        apply_max_steps = 40
+    dry_run = (_opt("BROWSER_USE_DRY_RUN") or "0").lower() in ("1", "true", "yes")
+
     cfg = Config(
         telegram_bot_token=_opt("TELEGRAM_BOT_TOKEN"),
         telegram_owner_id=owner_id,
@@ -76,17 +79,14 @@ def load_config(env_file: str | Path | None = None, root: Path | None = None) ->
         x_api_secret=_opt("X_API_SECRET"),
         x_access_token=_opt("X_ACCESS_TOKEN"),
         x_access_token_secret=_opt("X_ACCESS_TOKEN_SECRET"),
-        reddit_client_id=_opt("REDDIT_CLIENT_ID"),
-        reddit_client_secret=_opt("REDDIT_CLIENT_SECRET"),
-        reddit_user_agent=_opt("REDDIT_USER_AGENT"),
-        reddit_username=_opt("REDDIT_USERNAME"),
-        reddit_password=_opt("REDDIT_PASSWORD"),
         youtube_api_key=_opt("YOUTUBE_API_KEY"),
         project_root=root,
         workspace_dir=root / "workspace",
         sessions_dir=root / "sessions",
         downloads_dir=root / "downloads",
         state_dir=root / "state",
+        browser_use_dry_run=dry_run,
+        apply_to_job_max_steps=apply_max_steps,
     )
     for d in (cfg.workspace_dir, cfg.sessions_dir, cfg.downloads_dir, cfg.state_dir):
         d.mkdir(parents=True, exist_ok=True)
@@ -113,13 +113,6 @@ def platform_status(cfg: Config) -> dict[str, tuple[bool, str]]:
         (True, "ready (free tier: post + profile only, no search)")
         if all(x_keys)
         else (False, "X needs X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET — see SOCIAL_SETUP.md")
-    )
-
-    reddit_keys = (cfg.reddit_client_id, cfg.reddit_client_secret, cfg.reddit_user_agent)
-    status["reddit"] = (
-        (True, "ready")
-        if all(reddit_keys)
-        else (False, "Reddit needs REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT — see SOCIAL_SETUP.md")
     )
 
     status["youtube"] = (

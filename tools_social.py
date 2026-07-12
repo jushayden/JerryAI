@@ -11,7 +11,7 @@ from social.base import LoginChallengeError, SocialUnsupported
 from state import SearchCache
 from tools_browser import run_in_browser_thread
 
-PLATFORMS = ["reddit", "youtube", "x", "instagram"]
+PLATFORMS = ["youtube", "x", "instagram"]
 MAX_POST_TEXT = 300
 
 
@@ -125,7 +125,8 @@ def register(registry) -> None:
         func=social_search,
         schema=_schema("social_search",
                        "Search a social media platform for posts/videos about a topic. "
-                       "Note: X search is unavailable on the free tier; prefer reddit/youtube.",
+                       "Note: X search is unavailable on the free tier; prefer "
+                       "youtube/instagram, or web_search for general topics.",
                        {"platform": _PLATFORM_PARAM,
                         "query": {"type": "string", "description": "Search topic"},
                         "limit": {"type": "integer", "description": "Max results, default 10"}},

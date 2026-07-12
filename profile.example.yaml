@@ -5,9 +5,6 @@ owner:
   interests: ["ai", "cars", "tech"]
 
 social:
-  reddit:
-    handle: ""
-    subreddits: ["LocalLLaMA", "python"]   # used for "my feed" on Reddit
   youtube:
     handle: ""
     channels: []                            # channel IDs for "my feed"
@@ -18,3 +15,26 @@ social:
 
 agent:
   persona: "concise, factual, no filler"
+
+# Used by apply_to_job. resume_path/cover_letter_path are relative to workspace/
+# (or absolute) — put the actual files there yourself; nothing uploads them for you.
+applicant:
+  first_name: ""
+  last_name: ""
+  email: ""
+  phone: ""
+  address: {line1: "", city: "", postal_code: "", country: ""}
+  linkedin: ""
+  resume_path: "documents/resume.pdf"
+  cover_letter_path: "documents/cover_letter.pdf"
+  work_authorization: {us_citizen: true, sponsorship_needed: false}
+  demographics: {gender: "", race: "", veteran_status: "", disability_status: ""}
+  custom_qa:
+    "Why do you want to work here?": ""
+
+# Per-site login credentials for apply_to_job, matched by hostname (subdomains
+# match their parent, e.g. "greenhouse.io" also matches "boards.greenhouse.io").
+# Passed to browser-use as sensitive_data — the model sees only field names,
+# never these raw values.
+site_credentials:
+  greenhouse.io: {username_field_value: "", password: ""}

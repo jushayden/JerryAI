@@ -146,8 +146,14 @@ def run_bridge(cfg: Config, build_deps) -> None:
         )
         agent, make_ctx = build_deps(cfg, notifier)
         app_state.update(agent=agent, make_ctx=make_ctx, notifier=notifier)
-        await application.bot.send_message(cfg.telegram_owner_id,
-                                           "🤖 JerryAI online. Send me a task, /status, or /cancel.")
+        try:
+            await application.bot.send_message(
+                cfg.telegram_owner_id,
+                "🤖 JerryAI online. Send me a task, /status, or /cancel.")
+        except Exception:
+            # Owner hasn't opened a chat with the bot yet (send /start first) — don't
+            # let a startup notification failure crash the whole bridge.
+            pass
 
     def _is_owner(update: Update) -> bool:
         user = update.effective_user

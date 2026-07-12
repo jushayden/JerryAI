@@ -6,14 +6,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import load_config  # noqa: E402
+from gate import Gate  # noqa: E402
+from job_store import JobStore  # noqa: E402
 from notify import AutoApproveNotifier, ToolContext  # noqa: E402
 from state import CooldownStore, EventLog, SearchCache  # noqa: E402
 
 CLEAR_VARS = [
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_OWNER_ID", "OLLAMA_MODEL", "OLLAMA_HOST",
     "OLLAMA_NUM_CTX", "X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN",
-    "X_ACCESS_TOKEN_SECRET", "REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET",
-    "REDDIT_USER_AGENT", "REDDIT_USERNAME", "REDDIT_PASSWORD", "YOUTUBE_API_KEY",
+    "X_ACCESS_TOKEN_SECRET", "YOUTUBE_API_KEY",
+    "BROWSER_USE_DRY_RUN", "APPLY_TO_JOB_MAX_STEPS",
 ]
 
 
@@ -45,12 +47,15 @@ def fake_clock():
 
 @pytest.fixture
 def tool_ctx(tmp_config):
+    log = EventLog(tmp_config.state_dir / "events.jsonl")
     return ToolContext(
         cfg=tmp_config,
-        log=EventLog(tmp_config.state_dir / "events.jsonl"),
+        log=log,
         notifier=AutoApproveNotifier(),
         cooldowns=CooldownStore(tmp_config.state_dir / "cooldowns.json"),
         cache=SearchCache(),
         adapters={},
         task_id="test-task",
+        job_store=JobStore(tmp_config.state_dir / "jobs.json"),
+        gate=Gate(approver=AutoApproveNotifier(), log=log, timeout_s=1),
     )

@@ -73,6 +73,47 @@ async def test_all_decisions_logged(tool_ctx, tmp_path):
     assert "approval_requested" in kinds and "approval_resolved" in kinds
 
 
+async def test_check_custom_always_requests_approval(tool_ctx, tmp_path):
+    gate, approver = make_gate(tmp_path, verdict=True)
+    allowed = await gate.check_custom("apply_to_job.submit", "Job application ready to submit\nURL: https://e.com", tool_ctx)
+    assert allowed is True
+    assert approver.requests[0]["payload_text"] == "Job application ready to submit\nURL: https://e.com"
+    assert approver.requests[0]["platform"] == "custom"
+
+
+async def test_check_custom_denied(tool_ctx, tmp_path):
+    gate, _ = make_gate(tmp_path, verdict=False)
+    assert await gate.check_custom("apply_to_job.submit", "payload", tool_ctx) is False
+
+
+async def test_check_custom_timeout_is_deny(tool_ctx, tmp_path):
+    gate, _ = make_gate(tmp_path, verdict=None)
+    assert await gate.check_custom("apply_to_job.submit", "payload", tool_ctx) is False
+
+
+async def test_check_custom_ignores_pre_authorized(tool_ctx, tmp_path):
+    """Even a '!'-prefixed task must not skip approval for a real job submission."""
+    gate, approver = make_gate(tmp_path, verdict=True)
+    tool_ctx.pre_authorized = True
+    await gate.check_custom("apply_to_job.submit", "payload", tool_ctx)
+    assert len(approver.requests) == 1  # still asked, unlike check()
+
+
+async def test_check_custom_never_logs_raw_args(tool_ctx, tmp_path):
+    gate, _ = make_gate(tmp_path, verdict=True)
+    await gate.check_custom("apply_to_job.submit", "REDACTED payload only", tool_ctx)
+    events = [json.loads(l) for l in
+              (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    gate_events = [e for e in events if e["kind"] == "gate_decision"]
+    assert gate_events and "args" not in gate_events[0]
+
+
+async def test_check_custom_respects_explicit_timeout(tool_ctx, tmp_path):
+    gate, approver = make_gate(tmp_path, verdict=True)
+    await gate.check_custom("apply_to_job.submit", "payload", tool_ctx, timeout_s=42)
+    assert approver.requests[0]["timeout_s"] == 42
+
+
 def test_card_text_variants():
     platform, action, payload = build_card_text(
         "social_post", {"platform": "x", "text": "hi", "media_path": "p.jpg"})

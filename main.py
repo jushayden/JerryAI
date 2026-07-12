@@ -15,6 +15,7 @@ import uuid
 from agent import Agent, ToolRegistry
 from config import Config, load_config, load_profile, platform_status
 from gate import Gate
+from job_store import JobStore
 from notify import AutoApproveNotifier, CLINotifier, ToolContext
 from state import CooldownStore, EventLog, SearchCache
 
@@ -28,6 +29,7 @@ def build_deps(cfg: Config, notifier) -> tuple[Agent, "ToolContextFactory"]:
 
     from social import build_adapters
     adapters = build_adapters(cfg, cooldowns)
+    job_store = JobStore(cfg.state_dir / "jobs.json")
 
     registry = ToolRegistry()
     import tools_fs
@@ -41,6 +43,8 @@ def build_deps(cfg: Config, notifier) -> tuple[Agent, "ToolContextFactory"]:
     tools_social.register(registry)
     import report_social
     report_social.register(registry)
+    import tools_jobs
+    tools_jobs.register(registry)
 
     gate = Gate(approver=notifier, log=log, timeout_s=cfg.approval_timeout_s)
     agent = Agent(cfg, registry, gate, log, profile=load_profile())
@@ -53,6 +57,7 @@ def build_deps(cfg: Config, notifier) -> tuple[Agent, "ToolContextFactory"]:
             cfg=cfg, log=log, notifier=notifier, cooldowns=cooldowns,
             cache=cache, adapters=adapters,
             task_id=uuid.uuid4().hex[:8], pre_authorized=pre,
+            job_store=job_store, gate=gate,
         )
         return ctx, cleaned
 

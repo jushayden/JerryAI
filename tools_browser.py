@@ -143,8 +143,9 @@ def get_scratch_session(cfg) -> BrowserSession:
     """Headless throwaway session for generic browsing. pw-thread only."""
     global _scratch
     if _scratch is None:
-        _scratch = BrowserSession(cfg.downloads_dir / "screens")
-        _scratch.start(headless=True)
+        session = BrowserSession(cfg.downloads_dir / "screens")
+        session.start(headless=True)  # only cache after a successful start
+        _scratch = session
     return _scratch
 
 
@@ -172,6 +173,27 @@ async def browser_extract(ctx: ToolContext, url: str, selector: str = "body") ->
         return await run_in_browser_thread(work)
     except SelectorError as e:
         return await _report_selector_error(ctx, e)
+
+
+async def web_search(ctx: ToolContext, query: str, max_results: int = 5) -> str:
+    """Search the web via the ddgs DuckDuckGo library (no API key, no browser).
+
+    Deliberately NOT browser-scraped: DuckDuckGo's HTML pages CAPTCHA-check
+    headless browsers, and this project never solves or bypasses bot checks.
+    """
+    def work():
+        from ddgs import DDGS
+        results = DDGS().text(query, max_results=max_results)
+        lines = []
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "").strip()
+            href = r.get("href", "")
+            body = " ".join(r.get("body", "").split())[:200]
+            lines.append(f"{i}. {title}\n   {href}\n   {body}")
+        return "\n".join(lines)
+
+    result = await asyncio.to_thread(work)
+    return result or f"No results found for '{query}'."
 
 
 async def browser_screenshot(ctx: ToolContext, url: str) -> str:
@@ -216,6 +238,18 @@ def _schema(name: str, description: str, params: dict, required: list[str]) -> d
 
 
 def register(registry) -> None:
+    registry.register(ToolSpec(
+        name="web_search",
+        func=web_search,
+        schema=_schema("web_search",
+                       "Search the web for anything: facts, news, current events, "
+                       "explanations. Returns titles, links and snippets. Follow up "
+                       "with browser_extract on a promising link to read the page.",
+                       {"query": {"type": "string", "description": "Search terms"},
+                        "max_results": {"type": "integer",
+                                        "description": "Max results, default 5"}},
+                       ["query"]),
+    ))
     registry.register(ToolSpec(
         name="browser_extract",
         func=browser_extract,

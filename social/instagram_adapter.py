@@ -16,6 +16,8 @@ import time
 from social.base import LoginChallengeError, SocialAdapter, SocialUnsupported, make_post
 
 FEED_SELECTOR = "article"
+# Hashtag/explore pages don't use <article> — the grid is plain post links.
+GRID_SELECTOR = "a[href*='/p/'], a[href*='/reel/']"
 CHALLENGE_MARKERS = ("/challenge/", "/accounts/login/", "/accounts/suspended/")
 
 
@@ -48,8 +50,9 @@ class InstagramAdapter(SocialAdapter):
     def _get_session(self):
         from tools_browser import BrowserSession
         if self._session is None:
-            self._session = BrowserSession(self.cfg.downloads_dir / "screens")
-            self._session.start(headless=True, user_data_dir=self.session_dir)
+            session = BrowserSession(self.cfg.downloads_dir / "screens")
+            session.start(headless=True, user_data_dir=self.session_dir)  # cache only on success
+            self._session = session
         return self._session
 
     def _throttle(self) -> None:
@@ -115,10 +118,37 @@ class InstagramAdapter(SocialAdapter):
                                    url=link, media_urls=img))
         return posts
 
+    def _scrape_grid(self, session, limit: int) -> list[dict]:
+        """Hashtag/explore grid pages: no <article> wrapper — each post is a bare
+        link tile whose <img alt> carries Instagram's caption/description text."""
+        session.wait_for(GRID_SELECTOR)
+        for _ in range(2):
+            session.page.mouse.wheel(0, 1500)
+            session.page.wait_for_timeout(1200)
+        self.last_screenshot = session.screenshot("instagram_results")
+        posts = []
+        for tile in session.page.locator(GRID_SELECTOR).all()[:limit]:
+            try:
+                href = tile.get_attribute("href", timeout=1500) or ""
+            except Exception:
+                continue
+            url = f"https://www.instagram.com{href}" if href.startswith("/") else href
+            text, img = "", []
+            try:
+                img_el = tile.locator("img").first
+                text = (img_el.get_attribute("alt", timeout=1500) or "")[:300]
+                src = img_el.get_attribute("src", timeout=1500)
+                if src:
+                    img = [src]
+            except Exception:
+                pass
+            posts.append(make_post("instagram", text=text, url=url, media_urls=img))
+        return posts
+
     def search(self, query: str, limit: int = 10) -> list[dict]:
         tag = query.strip().lstrip("#").replace(" ", "")
         session = self._open(f"https://www.instagram.com/explore/tags/{tag}/")
-        return self._scrape_posts(session, limit)
+        return self._scrape_grid(session, limit)
 
     def get_feed(self, limit: int = 10) -> list[dict]:
         session = self._open("https://www.instagram.com/")
