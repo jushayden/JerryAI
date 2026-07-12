@@ -177,8 +177,17 @@ async def _ensure_edge() -> None:
 
 
 async def _ctx():
-    """Return the active page. Production uses Edge; tests explicitly select owned mode."""
+    """Return the active page. Production uses Edge; tests explicitly select owned mode.
+    Self-heals a stale CDP connection: if Edge was closed/reopened since we attached,
+    the cached browser handle is dead — drop it and reconnect instead of erroring."""
     global _pw, _browser, _context, _page, _cdp
+    if _cdp and _browser is not None and not _browser.is_connected():
+        try:
+            await _pw.stop()
+        except Exception:
+            pass
+        _pw = _browser = _context = _page = None
+        _audit("cdp_reconnect", {"reason": "stale connection to a restarted Edge"}, ok=True)
     if _page is not None and not _page.is_closed():
         if not (_task is not None and _task.source_url):
             return _page
