@@ -1,93 +1,66 @@
-// Pocket Agent J badge — sends prompts (+ current URL) to the local agent.
 (() => {
-  if (window.top !== window) return; // main frame only, not every iframe
-  const BASE = "http://127.0.0.1:8765";
-  const TOKEN = "pocket-agent-local";
-
-  const badge = document.createElement("div");
-  badge.id = "pocket-agent-badge";
-  badge.textContent = "J";
-  badge.title = "Pocket Agent";
-
-  const panel = document.createElement("div");
-  panel.id = "pocket-agent-panel";
-  panel.innerHTML = `
-    <h1>Pocket Agent</h1>
-    <textarea id="pocket-agent-input"
-      placeholder="What should I do? (this page's URL is sent along)"></textarea>
-    <button id="pocket-agent-send">Do it</button>
-    <div id="pocket-agent-status"></div>`;
-
-  document.documentElement.appendChild(badge);
-  document.documentElement.appendChild(panel);
-
-  const input = panel.querySelector("#pocket-agent-input");
-  const send = panel.querySelector("#pocket-agent-send");
-  const status = panel.querySelector("#pocket-agent-status");
-  let polling = null;
-
-  badge.addEventListener("click", () => {
-    panel.classList.toggle("pa-open");
-    if (panel.classList.contains("pa-open")) input.focus();
-  });
-
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send.click();
-    }
-  });
-
-  async function api(path, opts = {}) {
-    const resp = await fetch(BASE + path, {
-      ...opts,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Pocket-Token": TOKEN,
-        ...(opts.headers || {}),
-      },
-    });
-    return resp.json();
+  "use strict";
+  if (window.top !== window || document.getElementById("tora-ai-extension")) return;
+  const host = document.createElement("div"); host.id = "tora-ai-extension";
+  const shadow = host.attachShadow({ mode: "closed" });
+  const css = document.createElement("link"); css.rel = "stylesheet"; css.href = chrome.runtime.getURL("content.css");
+  const badge = document.createElement("button"); badge.className = "badge"; badge.textContent = "T";
+  badge.type = "button"; badge.title = "Tora AI"; badge.setAttribute("aria-label", "Open Tora AI"); badge.setAttribute("aria-expanded", "false");
+  const panel = document.createElement("section"); panel.className = "panel"; panel.hidden = true;
+  panel.innerHTML = '<header><strong>Tora AI</strong><button type="button" class="settings">Pair / Options</button></header><label for="tora-prompt">What should I do on this page?</label><textarea id="tora-prompt" maxlength="4000" placeholder="Describe your task…"></textarea><button type="button" class="send">Send to Tora</button><p class="status" role="status" aria-live="polite"></p><small>Approvals and full reports arrive in Telegram.</small>';
+  shadow.append(css, panel, badge); document.documentElement.appendChild(host);
+  const input = panel.querySelector("textarea"), send = panel.querySelector(".send"), status = panel.querySelector(".status");
+  let timer = null, busy = false, failures = 0;
+  function finish() { busy = false; send.disabled = false; badge.classList.remove("busy"); clearTimeout(timer); }
+  async function api(message) {
+    const result = await chrome.runtime.sendMessage(message);
+    if (!result) throw new Error("Reload this page after updating the extension.");
+    return result;
   }
-
-  send.addEventListener("click", async () => {
-    const text = input.value.trim();
-    if (!text) return;
-    send.disabled = true;
-    badge.classList.add("pa-busy");
-    status.textContent = "Sending…";
+  async function poll(id) {
     try {
-      const { id, error } = await api("/task", {
-        method: "POST",
-        body: JSON.stringify({ text, url: location.href }),
-      });
-      if (error) throw new Error(error);
-      status.textContent = `Queued as ${id}…`;
-      input.value = "";
-      clearInterval(polling);
-      polling = setInterval(async () => {
-        try {
-          const t = await api(`/task/${id}`);
-          if (t.status === "running") {
-            status.textContent = `Working — step ${t.steps}: ${t.step || "starting"}`;
-          } else if (t.status === "queued") {
-            status.textContent = "Queued…";
-          } else {
-            clearInterval(polling);
-            badge.classList.remove("pa-busy");
-            send.disabled = false;
-            const tag = t.status === "done" ? "✅" : "⚠️ " + t.status;
-            const detail = t.result || t.needs || "";
-            const telegram = t.status === "done" ? " — full report sent to Telegram" : "";
-            status.textContent = `${tag} ${detail}${telegram}`;
-          }
-        } catch { /* agent restarting; keep polling */ }
-      }, 1500);
-    } catch (e) {
-      badge.classList.remove("pa-busy");
-      send.disabled = false;
-      status.textContent =
-        "❌ Can't reach Pocket Agent — is `python main.py` running? (" + e.message + ")";
+      const task = await api({ type: "tora:status", id });
+      if (task.error) {
+        if ([403, 404].includes(task.status)) { status.textContent = task.error; finish(); return; }
+        throw new Error(task.error);
+      }
+      failures = 0;
+      if (task.status === "queued") status.textContent = "Queued. Follow progress in Telegram.";
+      else if (task.status === "running") status.textContent = task.needs ? `Needs you: ${task.needs}` : `Working — step ${task.steps}: ${task.step || "starting"}`;
+      else if (["done", "failed", "needs_attention", "cancelled"].includes(task.status)) {
+        status.textContent = `${task.status}: ${task.result || task.needs || "Check Telegram for details."}`; finish(); return;
+      } else throw new Error("Unexpected task status. Check Telegram.");
+    } catch (error) {
+      failures++;
+      status.textContent = failures >= 5 ? `Connection lost. ${error.message} Check Telegram before sending the task again.` : "Reconnecting to Tora…";
+      if (failures >= 5) { finish(); return; }
     }
+    timer = setTimeout(() => poll(id), Math.min(1500 * (failures + 1), 6000));
+  }
+  async function submit() {
+    const text = input.value.trim(); if (!text || busy) return;
+    busy = true; failures = 0; send.disabled = true; badge.classList.add("busy"); status.textContent = "Sending…";
+    try {
+      const result = await api({ type: "tora:task", text });
+      if (result.error) throw new Error(result.error);
+      if (!/^[a-f0-9]{6}$/.test(result.id || "")) throw new Error("Unexpected task response.");
+      input.value = ""; status.textContent = `Queued as ${result.id}.`; timer = setTimeout(() => poll(result.id), 1000);
+    } catch (error) { finish(); status.textContent = `${error.message} Check that python main.py is running.`; }
+  }
+  // Only a real user gesture can enqueue work; scripts on a visited page cannot.
+  send.addEventListener("click", event => { if (event.isTrusted) submit(); });
+  input.addEventListener("keydown", event => {
+    if (event.isTrusted && event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); }
   });
+  badge.addEventListener("click", event => {
+    if (!event.isTrusted) return;
+    panel.hidden = !panel.hidden; badge.setAttribute("aria-expanded", String(!panel.hidden));
+    if (!panel.hidden) input.focus();
+  });
+  panel.addEventListener("keydown", event => { if (event.key === "Escape") { panel.hidden = true; badge.setAttribute("aria-expanded", "false"); badge.focus(); } });
+  panel.querySelector(".settings").addEventListener("click", event => {
+    if (event.isTrusted) api({ type: "tora:options" }).catch(() => { status.textContent = "Open Options from edge://extensions."; });
+  });
+  window.addEventListener("pagehide", () => clearTimeout(timer));
+  window.addEventListener("pageshow", event => { if (event.persisted && busy) { finish(); status.textContent = "Page restored. Check Telegram for your task's result."; } });
 })();

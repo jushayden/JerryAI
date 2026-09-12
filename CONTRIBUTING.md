@@ -7,8 +7,8 @@ roadmap, see [PHASE2_BUILD_PLAN.md](PHASE2_BUILD_PLAN.md).
 ## 1. Clone
 
 ```
-git clone https://github.com/jushayden/JerryAI.git
-cd JerryAI
+git clone https://github.com/jushayden/Tora-AI.git
+cd Tora-AI
 ```
 
 ## 2. Prerequisites
@@ -52,7 +52,7 @@ deleting the message — assume it's compromised the moment it's posted anywhere
 python main.py
 ```
 
-Starts the mock-form server (`:8000`), warms up the model, and starts Telegram polling.
+Warms the model and starts Telegram polling. Set `MOCK_FORM_ENABLED=1` to run the local mock-form fixture too.
 On your phone: message your bot, `/start` once, then just send it tasks. See README's
 "Demo script" section for example tasks to try.
 

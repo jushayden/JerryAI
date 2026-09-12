@@ -1,9 +1,11 @@
-"""Filesystem / PC tools for Pocket Agent. All paths are sandboxed to config.SANDBOX_ROOT."""
+"""Filesystem / PC tools for Tora AI. All paths are sandboxed to config.SANDBOX_ROOT."""
 import asyncio
 import os
 import shutil
 import subprocess
 import time
+import tempfile
+import yaml
 from pathlib import Path
 
 import config
@@ -55,6 +57,8 @@ async def write_file(args: dict) -> str:
     try:
         p = _safe(args["path"])
         content = str(args.get("content", ""))
+        if p.exists() and not await confirm_cb(f"Replace the contents of existing file: {p}"):
+            return "User DENIED the overwrite. Do not retry."
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         touched.append(p)
@@ -80,6 +84,10 @@ async def move_file(args: dict) -> str:
     try:
         src = _safe(args["src"])
         dst = _safe(args["dst"])
+        if src == config.SANDBOX_ROOT.expanduser().resolve():
+            return "Error: cannot move the sandbox root."
+        if dst.exists() and not await confirm_cb(f"Replace {dst} with {src}?"):
+            return "User DENIED the overwrite. Do not retry."
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dst)
         touched.append(dst)
@@ -91,6 +99,8 @@ async def move_file(args: dict) -> str:
 async def delete_file(args: dict) -> str:
     try:
         p = _safe(args["path"])
+        if p == config.SANDBOX_ROOT.expanduser().resolve():
+            return "Error: cannot delete the sandbox root."
         if not p.exists():
             return f"Error: {p} does not exist"
         if p.is_dir():
@@ -133,9 +143,7 @@ async def read_profile(args: dict) -> str:
         if config.PROFILE_PATH.exists():
             base = config.PROFILE_PATH.read_text(encoding="utf-8")
         else:
-            example = config.PROJECT_ROOT / "profile.example.yaml"
-            base = ("(demo persona — profile.yaml not filled in yet)\n"
-                    + example.read_text(encoding="utf-8"))
+            return "Error: profile.yaml is missing. Ask the user for their details; never use the example persona on a real form."
         # Merge in facts the user has volunteered via Telegram (/remember).
         if config.PROFILE_EXTRA_PATH.exists():
             extra = config.PROFILE_EXTRA_PATH.read_text(encoding="utf-8").strip()
@@ -153,9 +161,22 @@ async def remember_fact(args: dict) -> str:
         value = str(args.get("value", "")).strip()
         if not key or not value:
             return "Error: remember_fact needs both 'key' and 'value'."
-        line = f"{key}: {value}\n"
-        with open(config.PROFILE_EXTRA_PATH, "a", encoding="utf-8") as f:
-            f.write(line)
+        path = config.PROFILE_EXTRA_PATH
+        existing = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if existing is None:
+            existing = {}
+        if not isinstance(existing, dict):
+            return "Error: profile_extra.yaml must contain a YAML mapping. Fix it before saving facts."
+        existing[key] = value
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # A quoted YAML serializer preserves colons, newlines, Unicode and booleans.
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                yaml.safe_dump(existing, f, allow_unicode=True, sort_keys=False)
+            os.replace(tmp, path)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
         return f"Remembered: {key} = {value}"
     except Exception as e:
         return f"Error: {e}"

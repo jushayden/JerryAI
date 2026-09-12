@@ -1,4 +1,4 @@
-"""Pocket Agent core loop: Ollama tool-calling agent over the shared tool registry."""
+"""Tora AI core loop: Ollama tool-calling agent over the shared tool registry."""
 import asyncio
 import json
 import sys
@@ -8,7 +8,7 @@ import ollama
 import config
 import tools_fs
 
-SYSTEM_PROMPT = f"""You are Jerry, an AI assistant co-driving the user's real Microsoft Edge session on their behalf.
+SYSTEM_PROMPT = f"""You are Tora, an AI assistant co-driving the user's real Microsoft Edge session on their behalf.
 
 Environment: Windows. The user's home directory is {config.SANDBOX_ROOT} and their Desktop is {config.DESKTOP}. File access only works inside {config.SANDBOX_ROOT} — always use these exact absolute paths. Never use placeholders like %USERNAME% or ~, and never guess a username (the name in the profile is NOT the Windows username).
 
@@ -246,24 +246,25 @@ async def run_task(
 async def warm_up():
     """One trivial chat call so the model is loaded and kept warm."""
     client = ollama.AsyncClient(host=config.OLLAMA_HOST)
-    await client.chat(
+    await asyncio.wait_for(client.chat(
         model=config.MODEL,
         messages=[{"role": "user", "content": "Say ready"}],
         options={"num_ctx": config.NUM_CTX},
         keep_alive=config.KEEP_ALIVE,
-    )
+    ), timeout=config.MODEL_CALL_TIMEOUT)
 
 
 async def ollama_ready() -> tuple[bool, str]:
     """Check that Ollama is reachable and the configured model is pulled."""
     try:
         client = ollama.AsyncClient(host=config.OLLAMA_HOST)
-        resp = await client.list()
+        resp = await asyncio.wait_for(client.list(), timeout=10)
         names = [m.model for m in resp.models]
     except Exception as e:
         return False, f"Ollama not reachable at {config.OLLAMA_HOST}: {e}"
-    base = config.MODEL.split(":")[0]
-    if any(n == config.MODEL or n.split(":")[0] == base for n in names):
+    # Tags select materially different models. qwen3:8b cannot satisfy qwen3:14b.
+    wanted = config.MODEL if ":" in config.MODEL else config.MODEL + ":latest"
+    if wanted in names:
         return True, f"Ollama up, model {config.MODEL} available."
     return False, (
         f"Ollama up but model {config.MODEL} not pulled. "

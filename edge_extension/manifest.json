@@ -1,14 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Pocket Agent (J)",
-  "version": "1.0",
-  "description": "Floating J badge: send the page you're on plus a prompt to your local Pocket Agent.",
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
-      "css": ["content.css"],
-      "run_at": "document_idle"
-    }
-  ]
+  "name": "Tora AI — Browser Co-driver",
+  "version": "1.1.0",
+  "description": "Send a task from the current page to your paired local Tora AI agent.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "background": {"service_worker": "background.js"},
+  "options_page": "options.html",
+  "action": {"default_title": "Pair Tora AI"},
+  "content_scripts": [{"matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle"}],
+  "web_accessible_resources": [{"resources": ["content.css"], "matches": ["http://*/*", "https://*/*"]}]
 }

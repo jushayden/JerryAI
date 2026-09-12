@@ -1,4 +1,4 @@
-"""Playwright tools for Jerry's real-Edge co-drive and test browser.
+"""Playwright tools for Tora's real-Edge co-drive and test browser.
 
 Async Playwright only. Module-level lazy singleton browser context reusing
 one visible Chromium page. All tool fns return strings and never raise.
@@ -79,7 +79,7 @@ def configure(confirm=None, task=None, secret_resolver=None):
     _dom_failures.clear()
     _secret_login_authorization = None
     if task is not None and getattr(task, "source_url", None):
-        _page = None  # force _ctx() to select the exact J-badge source tab
+        _page = None  # force _ctx() to select the exact T-badge source tab
 
 
 def _audit(action: str, details=None, *, ok: bool | None = None) -> None:
@@ -152,7 +152,7 @@ async def _ensure_edge() -> None:
     running = await asyncio.to_thread(_edge_running)
     if running:
         summary = (
-            "Close and relaunch Microsoft Edge with Jerry co-drive enabled. "
+            "Close and relaunch Microsoft Edge with Tora co-drive enabled. "
             "Edge will restore the last session, but unsaved page state may be lost."
         )
         if not await _confirm_cb(summary):
@@ -206,7 +206,7 @@ async def _ctx():
             _cdp = False
         else:
             raise RuntimeError("BROWSER_MODE must be 'edge' or 'owned'")
-    # A J-badge task must begin on the tab that created it, not whichever tab was last.
+    # A T-badge task must begin on the tab that created it, not whichever tab was last.
     if _context.pages:
         wanted = (_task.source_url if _task is not None else None) or ""
         exact = next((p for p in _context.pages
@@ -267,7 +267,7 @@ _EXTRACT_JS = """
   const kept = [];
   for (const el of cand) {
     // Hidden radios/checkboxes often have a visible associated label (Tesla/React design
-    // systems). Keep form fields so Jerry can operate their visible label safely.
+    // systems). Keep form fields so Tora can operate their visible label safely.
     if (!isVisible(el) && !isFormField(el)) continue;
     if (el.disabled) continue;
     if (!isFormField(el)) {
@@ -492,7 +492,7 @@ def _secret_locators() -> list:
 
 
 def _control_locator(frame, el: dict, field_id: str):
-    """Use a DOM-stable attribute when available, falling back to Jerry's marker."""
+    """Use a DOM-stable attribute when available, falling back to Tora's marker."""
     dom_id = str(el.get("dom_id") or "").replace('"', '\\"')
     if dom_id:
         return frame.locator(f'[id="{dom_id}"]')
@@ -968,7 +968,7 @@ async def close_tab(args: dict) -> str:
             return f"Error: tab index {idx} out of range."
         target = pages[idx]
         if target not in _owned_pages:
-            return "Error: Jerry only closes tabs it opened for the current session."
+            return "Error: Tora only closes tabs it opened for the current session."
         url = target.url
         _owned_pages.discard(target)
         await target.close()
@@ -1530,7 +1530,7 @@ TOOLS.update({
         {"source_id": {"type": "string"}, "target_id": {"type": "string"}},
         ["source_id", "target_id"], drag_and_drop),
     "close_tab": _simple_tool(
-        "close_tab", "Close a tab Jerry opened. Existing user tabs cannot be closed.",
+        "close_tab", "Close a tab Tora opened. Existing user tabs cannot be closed.",
         {"index": {"type": "integer"}}, ["index"], close_tab),
     "prepare_dialog": _simple_tool(
         "prepare_dialog", "Choose how to handle the next JavaScript alert/confirm/prompt before clicking its trigger.",
