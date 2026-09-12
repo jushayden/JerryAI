@@ -12,6 +12,8 @@ import tools_fs
 async def main():
     tmp = (config.SANDBOX_ROOT / f"_pocket_agent_test_{uuid.uuid4().hex[:8]}").resolve()
     tmp.mkdir(parents=True)
+    original_extra = config.PROFILE_EXTRA_PATH
+    config.PROFILE_EXTRA_PATH = tmp / "profile_extra.yaml"  # keep test facts out of the real profile
     try:
         # --- write / read round-trip ---
         f = tmp / "sub" / "hello.txt"
@@ -129,6 +131,7 @@ async def main():
 
         print("\nALL TESTS PASSED")
     finally:
+        config.PROFILE_EXTRA_PATH = original_extra
         shutil.rmtree(tmp, ignore_errors=True)
 
 

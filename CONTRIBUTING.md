@@ -63,6 +63,7 @@ python test_state.py
 python test_tools_fs.py
 python test_remote_operator.py
 python test_vision.py
+python test_server.py
 python test_browser.py   # opens a visible Chromium window
 ```
 

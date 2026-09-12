@@ -21,16 +21,28 @@ Tora is a local-first Windows agent. Ollama runs the reasoning model on your PC;
    ```
 
    If your machine needs a smaller model, pull one of the fallbacks and set `MODEL=` in `.env`.
+   Tora checks the exact tag at startup, so `MODEL=` must match a line of `ollama list`. On a GPU
+   with 8 GB of VRAM or less, a 7B model such as `ollama pull qwen2.5:7b` (`MODEL=qwen2.5:7b`) stays
+   fast; 30B models run mostly on the CPU. The optional visual fallback needs
+   `qwen3-vl:30b-a3b-instruct`; set `VISION_ENABLED=0` if you do not pull it.
 
-## Pair Telegram
+## Start the website
 
-Start Tora:
+Double-click `start-website.bat` (or run `.\start-website.bat` in PowerShell). It serves `website\dist` at <http://127.0.0.1:4173/> with Python's built-in static server and prints that URL. The website never contacts Telegram, Ollama, or the local agent, so it works before any of them are configured. If the port is already taken, the script names the process using it and exits without touching it; pick another port with `start-website.bat 5173`.
+
+## Start the agent
+
+Double-click `start-agent.bat` (or run `.\start-agent.bat`). It checks for `.venv`, `.env`, a real `BOT_TOKEN`, `profile.yaml`, Ollama, and a free port 8765, explains anything that is missing, then runs:
 
 ```powershell
 .venv\Scripts\python.exe main.py
 ```
 
-Send `/start` to your bot. Tora replies with your chat ID; it does not silently claim ownership. Stop Tora, set `ALLOWED_CHAT_ID=<your chat ID>` in `.env`, and start it again. Send `/start` once more to confirm that Tora is ready.
+Press Ctrl+C to stop.
+
+## Pair Telegram
+
+Start Tora with `start-agent.bat`, then send `/start` to your bot. Tora replies with your chat ID; it does not silently claim ownership. Stop Tora, set `ALLOWED_CHAT_ID=<your chat ID>` in `.env`, and start it again. Send `/start` once more to confirm that Tora is ready.
 
 ## Pair the Edge extension
 

@@ -10,7 +10,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # --- Telegram ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ALLOWED_CHAT_ID = int(os.getenv("ALLOWED_CHAT_ID", "0"))  # 0 = unpaired; /start displays ID only
+ALLOWED_CHAT_ID = int(os.getenv("ALLOWED_CHAT_ID") or 0)  # 0 = unpaired; /start displays ID only
 
 # --- Model ---
 MODEL = os.getenv("MODEL", "qwen3-coder:30b")
@@ -72,7 +72,7 @@ ARTIFACT_DIR = PROJECT_ROOT / "artifacts"
 DOWNLOAD_DIR = ARTIFACT_DIR / "downloads"
 
 # --- Co-drive: attach to the user's real Edge via CDP when available ---
-CDP_PORT = 9222
+CDP_PORT = int(os.getenv("CDP_PORT") or 9222)  # override when another app already owns 9222
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 BROWSER_MODE = os.getenv("BROWSER_MODE", "edge").lower()  # edge in production; owned in tests
 EDGE_START_TIMEOUT = float(os.getenv("EDGE_START_TIMEOUT", "20"))

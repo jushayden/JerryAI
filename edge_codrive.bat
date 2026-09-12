@@ -20,12 +20,13 @@ REM give Edge a moment to fully exit so the profile lock releases
 ping -n 3 127.0.0.1 >nul
 
 echo Relaunching Edge with co-drive...
+if not defined CDP_PORT set "CDP_PORT=9222"
 set "JERRY_EDGE_PROFILE=%LOCALAPPDATA%\JerryAI\EdgeProfile"
 if not exist "%JERRY_EDGE_PROFILE%" mkdir "%JERRY_EDGE_PROFILE%"
-start "" msedge.exe --remote-debugging-port=9222 --user-data-dir="%JERRY_EDGE_PROFILE%" --restore-last-session --no-first-run
+start "" msedge.exe --remote-debugging-port=%CDP_PORT% --user-data-dir="%JERRY_EDGE_PROFILE%" --restore-last-session --no-first-run
 
 echo.
-echo  Done. Edge is now co-drivable on port 9222.
+echo  Done. Edge is now co-drivable on port %CDP_PORT%.
 echo  Leave this window; the agent connects automatically on its next browser task.
 echo  This is Tora's persistent Edge profile. Your normal Edge profile is unchanged.
 echo.

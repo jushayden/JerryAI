@@ -42,13 +42,30 @@ _secret_login_authorization: dict | None = None
 _dom_failures: dict[str, int] = {}
 
 
+_cdp_foreign: str | None = None  # a non-Edge DevTools server answering on CDP_PORT
+
+
 def _cdp_available() -> bool:
-    """Is the user's real Edge listening on the debug port? (co-drive launcher started it)"""
+    """Is Microsoft Edge listening on the debug port? (co-drive launcher started it)
+
+    Any other DevTools server on the same port (an Electron app, Chrome, a test
+    browser) is reported through `_cdp_foreign` and ignored, so the agent never
+    attaches to and drives the wrong process.
+    """
+    global _cdp_foreign
+    _cdp_foreign = None
     try:
         with urllib.request.urlopen(config.CDP_URL + "/json/version", timeout=0.7) as r:
-            return r.status == 200
+            if r.status != 200:
+                return False
+            info = json.loads(r.read().decode("utf-8", "replace"))
     except Exception:
         return False
+    ua = str(info.get("User-Agent") or "")
+    if "Edg/" in ua and "Electron/" not in ua:
+        return True
+    _cdp_foreign = str(info.get("Browser") or ua or "unknown DevTools server")
+    return False
 
 DENIED_MSG = (
     "User DENIED this action (or it timed out). Do not retry it. "
@@ -149,6 +166,11 @@ async def _ensure_edge() -> None:
     """Start Edge, or approval-gate closing an already-running non-CDP session."""
     if await asyncio.to_thread(_cdp_available):
         return
+    if _cdp_foreign:
+        raise RuntimeError(
+            f"port {config.CDP_PORT} is already used by another DevTools-enabled app "
+            f"({_cdp_foreign}). Close it, or set CDP_PORT in .env and relaunch Edge with "
+            "edge_codrive.bat")
     running = await asyncio.to_thread(_edge_running)
     if running:
         summary = (
@@ -1076,7 +1098,7 @@ async def scrape_page(args: dict) -> str:
         selector = str(args.get("selector", "")).strip()
         data = await page.evaluate(
             """({mode, limit, selector}) => {
-              const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+              const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
               const out = {title: document.title, url: location.href, mode, items: []};
               if (mode === 'summary') {
                 out.text = clean(document.body ? document.body.innerText : '').slice(0, 12000);
@@ -1159,7 +1181,7 @@ async def _add_vision_overlay(page) -> list[dict]:
                 r.top > innerHeight || r.left > innerWidth) continue;
             const id = el.getAttribute('data-agent-id');
             const label = (el.getAttribute('aria-label') || el.innerText ||
-              el.getAttribute('placeholder') || el.getAttribute('name') || '').trim().replace(/\s+/g,' ').slice(0,80);
+              el.getAttribute('placeholder') || el.getAttribute('name') || '').trim().replace(/\\s+/g,' ').slice(0,80);
             const box = document.createElement('div');
             box.style.cssText = `position:absolute;left:${Math.max(0,r.left)}px;top:${Math.max(0,r.top)}px;` +
               `width:${r.width}px;height:${r.height}px;border:2px solid #ff3158;box-sizing:border-box;`;

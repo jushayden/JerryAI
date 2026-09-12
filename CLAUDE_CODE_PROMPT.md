@@ -40,6 +40,7 @@ Your work:
    python test_tools_fs.py
    python test_remote_operator.py
    python test_vision.py
+   python test_server.py
    ```
 
    On Windows, also run `python test_browser.py` and one manual Edge co-drive smoke test. The browser test needs a visible desktop and the Ollama model is not required for the deterministic tests.

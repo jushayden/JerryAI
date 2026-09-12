@@ -91,6 +91,9 @@ python main.py
 ```
 
 Warms the model, starts the bot, and starts the T-badge endpoint. Set `MOCK_FORM_ENABLED=1` for the local development fixture.
+On Windows, `start-agent.bat` runs the same thing from `.venv` after checking the prerequisites, and
+`start-website.bat` serves the product site on <http://127.0.0.1:4173/> with no agent, bot, or model
+needed (see [QUICKSTART.md](QUICKSTART.md)).
 On your phone: send `/start` to display your chat ID, put it in `ALLOWED_CHAT_ID` in `.env`, restart, then send `/start` again. Only the configured chat can control Tora.
 
 - `/inbox` — email briefing (needs Gmail OAuth)
@@ -149,12 +152,12 @@ summary, screenshot, generated data/download artifacts, and a timestamped audit 
 
 ## Product website
 
-The polished Tora AI presentation site lives in [`website/dist/`](website/dist/). It is a dependency-free static site with an interactive WebGL agent core, responsive navigation, capability and workflow sections, an unconnected live-demo slot, and downloadable source packages. Serve it locally with `python -m http.server 4173 --directory website/dist`. The site never contacts the loopback agent or includes credentials. See [`website/README.md`](website/README.md) and [`RELEASE.md`](RELEASE.md) for packaging.
+The polished Tora AI presentation site lives in [`website/dist/`](website/dist/). It is a dependency-free static site with an interactive WebGL agent core, responsive navigation, capability and workflow sections, an unconnected live-demo slot, and downloadable source packages. Serve it locally with `start-website.bat` (or `python -m http.server 4173 --bind 127.0.0.1 --directory website/dist`). The site never contacts the loopback agent or includes credentials. See [`website/README.md`](website/README.md) and [`RELEASE.md`](RELEASE.md) for packaging.
 
 ## Tests
 
 `python test_state.py` · `python test_tools_fs.py` · `python test_remote_operator.py` ·
-`python test_vision.py` · `python test_browser.py`
+`python test_vision.py` · `python test_server.py` · `python test_browser.py`
 (browser test opens a visible Chromium window and drives the mock form end to end)
 
 After pulling the vision model, run `python test_vision.py --real` for the local-model smoke test.

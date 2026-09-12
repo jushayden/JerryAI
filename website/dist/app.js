@@ -16,7 +16,7 @@
   nav.addEventListener("click", e => { if (e.target.closest("a")) closeMenu(); });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && nav.classList.contains("is-open")) closeMenu(true); });
   document.addEventListener("click", e => { if (!e.target.closest(".nav-wrap")) closeMenu(); });
-  window.matchMedia("(min-width: 651px)").addEventListener("change", closeMenu);
+  window.matchMedia("(min-width: 651px)").addEventListener("change", () => closeMenu());
   try {
     const repository = new URL(config.repository);
     if (repository.protocol === "https:") document.querySelectorAll("[data-repo]").forEach(a => { a.href = repository.href; });
