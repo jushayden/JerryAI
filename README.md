@@ -5,6 +5,18 @@ cloud API anywhere in the loop), and is **controlled from your phone** via a Tel
 bot: send a task, the PC does it (files, apps, browser, form-filling from your saved
 profile), your phone gets a report with proof.
 
+## See the website in 30 seconds
+
+```
+git clone https://github.com/jushayden/Tora-AI.git
+cd Tora-AI
+start-website.bat          # Windows          (macOS/Linux: ./start-website.sh)
+```
+
+Then open **<http://localhost:4173/>**. The site in `website/dist` is plain HTML/CSS/JS served by
+Python's built-in server — no Node, no build step, no bot, no model. It never contacts the local
+agent. (Double-clicking `website/dist/index.html` works too.)
+
 > New to this repo? Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** for team setup,
 > secrets handling, and git workflow. Design rationale + build status lives in
 > **[PHASE2_BUILD_PLAN.md](PHASE2_BUILD_PLAN.md)**.
