@@ -1,4 +1,4 @@
-"""Playwright tools for Jerry's real-Edge co-drive and test browser.
+"""Playwright tools for Tora's real-Edge co-drive and test browser.
 
 Async Playwright only. Module-level lazy singleton browser context reusing
 one visible Chromium page. All tool fns return strings and never raise.
@@ -42,13 +42,30 @@ _secret_login_authorization: dict | None = None
 _dom_failures: dict[str, int] = {}
 
 
+_cdp_foreign: str | None = None  # a non-Edge DevTools server answering on CDP_PORT
+
+
 def _cdp_available() -> bool:
-    """Is the user's real Edge listening on the debug port? (co-drive launcher started it)"""
+    """Is Microsoft Edge listening on the debug port? (co-drive launcher started it)
+
+    Any other DevTools server on the same port (an Electron app, Chrome, a test
+    browser) is reported through `_cdp_foreign` and ignored, so the agent never
+    attaches to and drives the wrong process.
+    """
+    global _cdp_foreign
+    _cdp_foreign = None
     try:
         with urllib.request.urlopen(config.CDP_URL + "/json/version", timeout=0.7) as r:
-            return r.status == 200
+            if r.status != 200:
+                return False
+            info = json.loads(r.read().decode("utf-8", "replace"))
     except Exception:
         return False
+    ua = str(info.get("User-Agent") or "")
+    if "Edg/" in ua and "Electron/" not in ua:
+        return True
+    _cdp_foreign = str(info.get("Browser") or ua or "unknown DevTools server")
+    return False
 
 DENIED_MSG = (
     "User DENIED this action (or it timed out). Do not retry it. "
@@ -79,7 +96,7 @@ def configure(confirm=None, task=None, secret_resolver=None):
     _dom_failures.clear()
     _secret_login_authorization = None
     if task is not None and getattr(task, "source_url", None):
-        _page = None  # force _ctx() to select the exact J-badge source tab
+        _page = None  # force _ctx() to select the exact T-badge source tab
 
 
 def _audit(action: str, details=None, *, ok: bool | None = None) -> None:
@@ -149,10 +166,15 @@ async def _ensure_edge() -> None:
     """Start Edge, or approval-gate closing an already-running non-CDP session."""
     if await asyncio.to_thread(_cdp_available):
         return
+    if _cdp_foreign:
+        raise RuntimeError(
+            f"port {config.CDP_PORT} is already used by another DevTools-enabled app "
+            f"({_cdp_foreign}). Close it, or set CDP_PORT in .env and relaunch Edge with "
+            "edge_codrive.bat")
     running = await asyncio.to_thread(_edge_running)
     if running:
         summary = (
-            "Close and relaunch Microsoft Edge with Jerry co-drive enabled. "
+            "Close and relaunch Microsoft Edge with Tora co-drive enabled. "
             "Edge will restore the last session, but unsaved page state may be lost."
         )
         if not await _confirm_cb(summary):
@@ -206,7 +228,7 @@ async def _ctx():
             _cdp = False
         else:
             raise RuntimeError("BROWSER_MODE must be 'edge' or 'owned'")
-    # A J-badge task must begin on the tab that created it, not whichever tab was last.
+    # A T-badge task must begin on the tab that created it, not whichever tab was last.
     if _context.pages:
         wanted = (_task.source_url if _task is not None else None) or ""
         exact = next((p for p in _context.pages
@@ -267,7 +289,7 @@ _EXTRACT_JS = """
   const kept = [];
   for (const el of cand) {
     // Hidden radios/checkboxes often have a visible associated label (Tesla/React design
-    // systems). Keep form fields so Jerry can operate their visible label safely.
+    // systems). Keep form fields so Tora can operate their visible label safely.
     if (!isVisible(el) && !isFormField(el)) continue;
     if (el.disabled) continue;
     if (!isFormField(el)) {
@@ -492,7 +514,7 @@ def _secret_locators() -> list:
 
 
 def _control_locator(frame, el: dict, field_id: str):
-    """Use a DOM-stable attribute when available, falling back to Jerry's marker."""
+    """Use a DOM-stable attribute when available, falling back to Tora's marker."""
     dom_id = str(el.get("dom_id") or "").replace('"', '\\"')
     if dom_id:
         return frame.locator(f'[id="{dom_id}"]')
@@ -968,7 +990,7 @@ async def close_tab(args: dict) -> str:
             return f"Error: tab index {idx} out of range."
         target = pages[idx]
         if target not in _owned_pages:
-            return "Error: Jerry only closes tabs it opened for the current session."
+            return "Error: Tora only closes tabs it opened for the current session."
         url = target.url
         _owned_pages.discard(target)
         await target.close()
@@ -1076,7 +1098,7 @@ async def scrape_page(args: dict) -> str:
         selector = str(args.get("selector", "")).strip()
         data = await page.evaluate(
             """({mode, limit, selector}) => {
-              const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+              const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
               const out = {title: document.title, url: location.href, mode, items: []};
               if (mode === 'summary') {
                 out.text = clean(document.body ? document.body.innerText : '').slice(0, 12000);
@@ -1159,7 +1181,7 @@ async def _add_vision_overlay(page) -> list[dict]:
                 r.top > innerHeight || r.left > innerWidth) continue;
             const id = el.getAttribute('data-agent-id');
             const label = (el.getAttribute('aria-label') || el.innerText ||
-              el.getAttribute('placeholder') || el.getAttribute('name') || '').trim().replace(/\s+/g,' ').slice(0,80);
+              el.getAttribute('placeholder') || el.getAttribute('name') || '').trim().replace(/\\s+/g,' ').slice(0,80);
             const box = document.createElement('div');
             box.style.cssText = `position:absolute;left:${Math.max(0,r.left)}px;top:${Math.max(0,r.top)}px;` +
               `width:${r.width}px;height:${r.height}px;border:2px solid #ff3158;box-sizing:border-box;`;
@@ -1530,7 +1552,7 @@ TOOLS.update({
         {"source_id": {"type": "string"}, "target_id": {"type": "string"}},
         ["source_id", "target_id"], drag_and_drop),
     "close_tab": _simple_tool(
-        "close_tab", "Close a tab Jerry opened. Existing user tabs cannot be closed.",
+        "close_tab", "Close a tab Tora opened. Existing user tabs cannot be closed.",
         {"index": {"type": "integer"}}, ["index"], close_tab),
     "prepare_dialog": _simple_tool(
         "prepare_dialog", "Choose how to handle the next JavaScript alert/confirm/prompt before clicking its trigger.",

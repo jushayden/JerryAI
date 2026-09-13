@@ -1,4 +1,4 @@
-"""Gmail read-only tools for Pocket Agent. One-time OAuth setup: see GMAIL_SETUP.md."""
+"""Gmail read-only tools for Tora AI. One-time OAuth setup: see GMAIL_SETUP.md."""
 import asyncio
 import html
 from email.utils import parsedate_to_datetime

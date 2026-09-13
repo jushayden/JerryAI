@@ -11,3 +11,9 @@ __pycache__/
 *.pyc
 .code-review-graph/
 .claude/settings.local.json
+.venv/
+.local-token
+.local-token.*
+.pytest_cache/
+release/
+*.tmp

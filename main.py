@@ -1,6 +1,6 @@
-"""Pocket Agent — single entry point.
+"""Tora AI — single entry point.
 
-Starts everything the demo needs: mock form server, Ollama check + model
+Starts the agent: Ollama check + model
 warm-up, Telegram bridge, and the real agent wired into the task worker.
 Run: python main.py
 """
@@ -71,7 +71,7 @@ async def _run_real_agent(task: state.TaskRecord) -> str:
     prompt = task.text
     if task.source_url:
         prompt += (
-            f"\n(The J badge was used on this exact page: {task.source_url}. "
+            f"\n(The T badge was used on this exact page: {task.source_url}. "
             "Act on that existing tab first.)"
         )
     result = await agent.run_task(
@@ -119,35 +119,52 @@ def _prune_screenshots() -> None:
 
 
 async def main() -> None:
+    if not config.BOT_TOKEN or config.BOT_TOKEN == "123456:ABC-your-token-from-BotFather":
+        raise RuntimeError("Set your own BOT_TOKEN in .env before starting. See QUICKSTART.md.")
+    config.ensure_local_token()
     _prune_screenshots()
-    form_proc = subprocess.Popen(
-        [sys.executable, "-m", "http.server", str(config.MOCK_FORM_PORT),
-         "--directory", str(config.MOCK_FORM_DIR)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"mock form: http://localhost:{config.MOCK_FORM_PORT}/index.html")
-
-    ok, msg = await agent.ollama_ready()
-    print(msg)
-    if ok:
-        print(f"warming up {config.MODEL} (first load can take a minute)...")
-        await agent.warm_up()
-        print("model ready")
-    else:
-        print("WARNING: tasks will fail until Ollama is running and the model is pulled")
-
-    bridge.set_agent(_run_real_agent)
-    server.configure(task_created_cb=bridge.notify_task_accepted)
-    await bridge.start_bridge()
-    await server.start_server()
-    print(f"J-badge endpoint: http://127.0.0.1:{config.LOCAL_PORT}")
-    print("Pocket Agent running — message your bot from the phone. Ctrl+C to stop.")
+    form_proc = None
     try:
+        if config.MOCK_FORM_ENABLED:
+            form_proc = subprocess.Popen(
+                [sys.executable, "-m", "http.server", str(config.MOCK_FORM_PORT),
+                 "--bind", "127.0.0.1", "--directory", str(config.MOCK_FORM_DIR)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"Mock form: http://127.0.0.1:{config.MOCK_FORM_PORT}/index.html")
+        ok, msg = await agent.ollama_ready()
+        print(msg)
+        if ok:
+            print(f"Warming up {config.MODEL}...")
+            try:
+                await agent.warm_up()
+                print("Model ready")
+            except Exception as error:
+                print(f"Warm-up failed: {error}. Check Ollama before sending tasks.")
+        else:
+            print("Tasks need Ollama and the configured model. You can still pair Telegram.")
+        bridge.set_agent(_run_real_agent)
+        server.configure(task_created_cb=bridge.notify_task_accepted)
+        await bridge.start_bridge()
+        await server.start_server()
+        print(f"Tora extension endpoint: http://127.0.0.1:{config.LOCAL_PORT}")
+        print("Tora AI running. Message your bot; Ctrl+C to stop.")
+        if config.ALLOWED_CHAT_ID == 0:
+            print("Send /start to see your chat ID, set ALLOWED_CHAT_ID in .env, then restart.")
         await asyncio.Event().wait()
     finally:
-        await server.stop_server()
-        await bridge.stop_bridge()
-        await tools_browser.shutdown()
-        form_proc.terminate()
+        # Cleanup also runs if model/bot/server startup fails partway through.
+        for cleanup in (server.stop_server, bridge.stop_bridge, tools_browser.shutdown):
+            try:
+                await cleanup()
+            except Exception as error:
+                state.log_event({"event": "cleanup_failed", "error": str(error)})
+        if form_proc is not None:
+            form_proc.terminate()
+            try:
+                await asyncio.to_thread(form_proc.wait, timeout=5)
+            except subprocess.TimeoutExpired:
+                form_proc.kill()
+                await asyncio.to_thread(form_proc.wait, timeout=5)
 
 
 if __name__ == "__main__":

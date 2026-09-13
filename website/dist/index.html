@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d10">
+  <title>Tora AI — Your computer. Your agent. Your control.</title>
+  <meta name="description" content="Meet Tora AI, a local-first AI agent for browser workflows, file tasks, and inbox briefings. Give it a goal from Telegram and stay in control of consequential actions.">
+  <meta property="og:title" content="Tora AI — Your computer. Your agent. Your control.">
+  <meta property="og:description" content="A local-first AI agent that turns goals into actions. Explore the workflow and download the source to run it yourself.">
+  <meta property="og:type" content="website">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="site-config.js"></script>
+  <script defer src="core.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="nav-wrap container">
+      <a href="#" class="brand" aria-label="Tora AI home"><svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true"><path d="M4 5h24v6H19v16h-6V11H4z" fill="currentColor"/><path d="M23 15h5v12h-5z" fill="currentColor" opacity=".45"/></svg><span>tora<span class="brand-ai"> AI</span></span></a>
+      <button class="menu-toggle" type="button" aria-label="Open navigation" aria-controls="navigation" aria-expanded="false"><span></span><span></span></button>
+      <nav id="navigation" aria-label="Main navigation">
+        <a href="#capabilities">Capabilities</a><a href="#how-it-works">How it works</a><a href="#demo">Demo</a><a href="#download">Download</a>
+      </nav>
+      <a class="github-link" data-repo href="https://github.com/jushayden/Tora-AI" target="_blank" rel="noopener noreferrer">View on GitHub <span aria-hidden="true">↗</span></a>
+    </div>
+  </header>
+  <main id="main">
+    <section class="hero container" aria-labelledby="hero-heading">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="eyebrow-line"></span> LOCAL-FIRST. HUMAN-DIRECTED.</p>
+        <h1 id="hero-heading">Give it a goal.<br>Keep the <span>control.</span></h1>
+        <p class="hero-description">Your computer, working with you. Tora turns a message into browser actions, file tasks, and useful answers—with a local AI model at its core.</p>
+        <div class="hero-actions"><a class="button button-primary" href="#download">Get Tora AI <span aria-hidden="true">↗</span></a><a class="button button-outline" href="#demo"><span class="play-icon" aria-hidden="true">▷</span> Explore the demo</a></div>
+        <p class="hero-note">Runs on your PC <span aria-hidden="true">/</span> Directed from Telegram</p>
+      </div>
+      <div class="core-stage">
+        <div class="core-label"><span class="tiny-square"></span> TORA / AGENT CORE</div>
+        <canvas id="agent-core" role="img" aria-label="Interactive 3D network representing Tora's agent loop"></canvas>
+        <div class="core-fallback" aria-hidden="true"><strong>TORA</strong><span>REASON · ACT · VERIFY</span></div>
+        <div class="orbit-tag tag-reason"><span>01</span> Reason</div>
+        <div class="orbit-tag tag-act"><span>02</span> Act</div>
+        <div class="orbit-tag tag-verify"><span>03</span> Verify</div>
+        <div class="core-bottom"><span>ONE GOAL. A CONNECTED WORKFLOW.</span><button id="motion-toggle" type="button" aria-pressed="false" aria-label="Pause 3D animation">Pause motion <span aria-hidden="true">Ⅱ</span></button></div>
+      </div>
+    </section>
+    <div class="foundation container" aria-label="Core technologies"><span>BUILT AROUND</span><div>Ollama <small>Local reasoning</small></div><div>Playwright <small>Browser actions</small></div><div>Telegram <small>Your control channel</small></div><div>Python <small>Extensible tools</small></div></div>
+    <section id="capabilities" class="section container" aria-labelledby="capabilities-heading">
+      <div class="section-heading"><div><p class="eyebrow">01 / CAPABILITIES</p><h2 id="capabilities-heading">Less busywork.<br>More forward motion.</h2></div><p>From the open browser tab to the files on your desktop. One agent, connected to the tools you already use.</p></div>
+      <div class="capability-grid">
+        <article class="capability capability-wide">
+          <div class="capability-top"><span class="line-icon" aria-hidden="true">↗</span><span class="card-index">01 — BROWSER</span></div>
+          <h3>A second pair of hands<br>for your browser.</h3><p>Research across tabs, fill forms from your saved profile, and collect structured results. Tora works inside a dedicated Edge session you can watch.</p>
+          <div class="browser-sample" aria-label="Illustrative browser workflow"><div class="window-bar"><i></i><i></i><i></i><span>Application workspace</span></div><div class="sample-fields"><div><span>Profile</span><strong>Read saved information <b>✓</b></strong></div><div><span>Application</span><strong>Prepare form fields <b>✓</b></strong></div><div class="approval-field"><span>Final step</span><strong>Ask before submitting <b>↗</b></strong></div></div><small>Example workflow</small></div>
+        </article>
+        <article class="capability"><div class="capability-top"><span class="line-icon" aria-hidden="true">⌘</span><span class="card-index">02 — DESKTOP</span></div><h3>Move work forward,<br>right on your PC.</h3><p>Create and organize files, open supported apps, and get a report of what changed. File access stays within your configured folder.</p><div class="file-sample"><span class="file-symbol" aria-hidden="true">≡</span><div><strong>research-notes.md</strong><span>Example file task</span></div><span class="file-check" aria-hidden="true">✓</span></div></article>
+        <article class="capability"><div class="capability-top"><span class="line-icon" aria-hidden="true">✉</span><span class="card-index">03 — INBOX</span></div><h3>A clearer view<br>of what needs you.</h3><p>Request a Gmail briefing with <code>/inbox</code>. Read-only access brings recent messages into focus, with a separate OAuth setup.</p><div class="inbox-sample"><span class="command">/inbox</span><span>Recent messages → a concise briefing</span></div></article>
+        <article class="capability"><div class="capability-top"><span class="line-icon" aria-hidden="true">◎</span><span class="card-index">04 — CONTROL</span></div><h3>Delegate the steps.<br>Own the decisions.</h3><p>Send goals and follow progress from Telegram. Review approval requests for consequential actions, ask for a status update, or cancel a running task.</p><div class="control-sample"><span class="command">/status</span><span class="command">/brief</span><span class="command">/cancel</span></div></article>
+      </div>
+    </section>
+    <section id="how-it-works" class="section workflow-section" aria-labelledby="workflow-heading"><div class="container">
+      <div class="section-heading"><div><p class="eyebrow">02 / THE WORKFLOW</p><h2 id="workflow-heading">A simple request.<br>A visible path to done.</h2></div><p>The model reasons locally. Tools take action. You stay connected through questions, approvals, and results.</p></div>
+      <ol class="workflow"><li><span class="step-number">01</span><h3>Give it a goal</h3><p>Message your Telegram bot or start a task from the Tora badge in Edge.</p><span class="step-detail">NATURAL LANGUAGE IN</span></li><li><span class="step-number">02</span><h3>Let it work</h3><p>The local model chooses tools, follows the task, and asks when information is missing.</p><span class="step-detail">REASON → ACT → OBSERVE</span></li><li><span class="step-number">03</span><h3>Review the result</h3><p>Receive the report, source links, and available screenshots or generated artifacts.</p><span class="step-detail">EVIDENCE BACK TO YOU</span></li></ol>
+      <div class="privacy-note"><span class="line-icon" aria-hidden="true">◇</span><div><strong>Local reasoning. Clear boundaries.</strong><p>Inference runs through Ollama on your computer. Telegram carries messages and reports; browser tasks visit external sites; optional Gmail access uses Google's API.</p></div></div>
+    </div></section>
+    <section id="demo" class="section container" aria-labelledby="demo-heading">
+      <div class="section-heading"><div><p class="eyebrow">03 / IN ACTION</p><h2 id="demo-heading">Meet your next<br>working rhythm.</h2></div><p>Explore an example of Tora's workflow. A live demo will be available here when it is connected.</p></div>
+      <div class="demo-shell">
+        <div class="demo-toolbar"><span class="demo-wordmark">tora <span>workspace</span></span><span class="sample-badge">INTERACTIVE WALKTHROUGH</span></div>
+        <div class="demo-tabs" role="tablist" aria-label="Example workflows"><button type="button" role="tab" id="tab-research" aria-controls="walkthrough-panel" aria-selected="true" data-scenario="research">Browser research</button><button type="button" role="tab" id="tab-files" aria-controls="walkthrough-panel" aria-selected="false" tabindex="-1" data-scenario="files">File task</button><button type="button" role="tab" id="tab-inbox" aria-controls="walkthrough-panel" aria-selected="false" tabindex="-1" data-scenario="inbox">Inbox briefing</button></div>
+        <div class="demo-content" id="walkthrough-panel" role="tabpanel" aria-labelledby="tab-research" tabindex="0">
+          <div class="demo-request"><span class="micro-label">THE REQUEST</span><blockquote id="sample-prompt">“Research a topic and save a short brief with source links.”</blockquote><div class="demo-avatar"><span class="avatar-mark">T</span><span>Tora AI<small>Your local agent</small></span></div><p id="sample-description">Follow the steps from a Telegram request to a sourced research brief.</p><button id="walkthrough-play" type="button" class="button button-primary"><span aria-hidden="true">▷</span> Play walkthrough</button><small class="demo-disclaimer">Scripted example. No model runs and no tasks are sent.</small></div>
+          <div class="demo-trace"><div class="trace-heading"><span>ACTIVITY</span><span id="trace-status" role="status" aria-live="polite">Ready to explore</span></div><ol id="trace-steps"><li><span class="trace-step-icon">1</span><div><strong>Receive the goal</strong><p>A task is added to the local queue.</p></div></li><li><span class="trace-step-icon">2</span><div><strong>Read and collect</strong><p>Browser tools gather relevant page content.</p></div></li><li><span class="trace-step-icon">3</span><div><strong>Write the brief</strong><p>The local model works with the observed information.</p></div></li><li><span class="trace-step-icon">4</span><div><strong>Return the evidence</strong><p>A summary and source links go back to Telegram.</p></div></li></ol></div>
+        </div>
+        <div id="live-demo-slot" class="live-demo-slot"><div><span class="live-label">LIVE DEMO</span><strong>A closer look is on the way.</strong><p>The live experience isn't connected yet. You can run Tora locally today.</p></div><a href="#download" class="text-link">Try it on your PC <span aria-hidden="true">↗</span></a></div>
+      </div>
+    </section>
+    <section id="download" class="section download-section" aria-labelledby="download-heading"><div class="container">
+      <div class="section-heading"><div><p class="eyebrow">04 / MAKE IT YOURS</p><h2 id="download-heading">Your machine.<br><span>Your Tora.</span></h2></div><p>Download the source, connect your own bot, and try Tora with your local model. Built for people who want to understand what their agent does.</p></div>
+      <div class="download-layout"><div class="download-card"><div class="download-card-head"><span class="platform-icon" aria-hidden="true">⊞</span><div><h3>Tora AI for Windows</h3><p>Developer preview · Python source</p></div></div><p>The complete local agent, setup helper, example configuration, and Edge extension. Models are downloaded separately with Ollama.</p><a class="button button-primary button-full" href="downloads/tora-ai-source.zip" download>Download agent source <span aria-hidden="true">↓</span></a><div class="download-links"><a href="downloads/tora-edge-extension.zip" download>Edge extension ZIP ↗</a><a href="downloads/QUICKSTART.md" download>Setup guide ↓</a></div><div class="requirements"><span>YOU'LL NEED</span><ul><li>Windows 11 + Microsoft Edge</li><li>Python 3.11+ and Ollama</li><li>Your own Telegram bot</li><li>Memory and storage for your chosen model</li></ul></div><p class="download-footnote">Source package, not a standalone installer. macOS and Linux desktop control are not supported by this Windows workflow.</p></div>
+      <div class="setup-panel"><div class="setup-head"><h3>Up and running.</h3><span>WINDOWS / POWERSHELL</span></div><ol class="setup-steps"><li><span>1</span><div><h4>Extract and set up</h4><p>Open the extracted Tora-AI folder in a terminal. The helper creates an isolated Python environment.</p><div class="code-block"><code id="setup-command">python scripts/setup.py</code><button class="copy-button" type="button" data-copy="setup-command" aria-label="Copy setup command">Copy</button></div></div></li><li><span>2</span><div><h4>Connect your model and bot</h4><p>Pull the model, add your bot token to <code>.env</code>, and fill in your profile. Follow the setup guide to pair your Telegram chat.</p><div class="code-block"><code id="model-command">ollama pull qwen3-coder:30b</code><button class="copy-button" type="button" data-copy="model-command" aria-label="Copy model command">Copy</button></div></div></li><li><span>3</span><div><h4>Start Tora</h4><p>Keep your computer awake. Send your bot a small task, such as creating a text file in your chosen workspace.</p><div class="code-block"><code id="run-command">.venv\Scripts\python.exe main.py</code><button class="copy-button" type="button" data-copy="run-command" aria-label="Copy run command">Copy</button></div></div></li></ol><a data-repo href="https://github.com/jushayden/Tora-AI" target="_blank" rel="noopener noreferrer" class="text-link">Explore the code on GitHub ↗</a></div></div>
+    </div></section>
+  </main>
+  <footer class="container"><div class="footer-top"><a href="#" class="brand"><span class="footer-mark" aria-hidden="true">T</span><span>tora<span class="brand-ai"> AI</span></span></a><p>Thoughtfully local. Purposefully capable.</p><a data-repo href="https://github.com/jushayden/Tora-AI" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div><div class="footer-bottom"><span>Tora AI · An independent agent project</span><span>Built with Python, Ollama, Playwright & Telegram</span></div></footer>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

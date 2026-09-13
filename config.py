@@ -1,5 +1,6 @@
-"""Central config for Pocket Agent. Values come from .env where secret."""
+"""Central config for Tora AI. Values come from .env where secret."""
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -9,7 +10,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # --- Telegram ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ALLOWED_CHAT_ID = int(os.getenv("ALLOWED_CHAT_ID", "0"))  # 0 = capture mode: first /start sets it
+ALLOWED_CHAT_ID = int(os.getenv("ALLOWED_CHAT_ID") or 0)  # 0 = unpaired; /start displays ID only
 
 # --- Model ---
 MODEL = os.getenv("MODEL", "qwen3-coder:30b")
@@ -71,7 +72,7 @@ ARTIFACT_DIR = PROJECT_ROOT / "artifacts"
 DOWNLOAD_DIR = ARTIFACT_DIR / "downloads"
 
 # --- Co-drive: attach to the user's real Edge via CDP when available ---
-CDP_PORT = 9222
+CDP_PORT = int(os.getenv("CDP_PORT") or 9222)  # override when another app already owns 9222
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 BROWSER_MODE = os.getenv("BROWSER_MODE", "edge").lower()  # edge in production; owned in tests
 EDGE_START_TIMEOUT = float(os.getenv("EDGE_START_TIMEOUT", "20"))
@@ -79,7 +80,33 @@ EDGE_START_TIMEOUT = float(os.getenv("EDGE_START_TIMEOUT", "20"))
 # --- Mock form server ---
 MOCK_FORM_PORT = 8000
 MOCK_FORM_DIR = PROJECT_ROOT / "mock_form"
+MOCK_FORM_ENABLED = os.getenv("MOCK_FORM_ENABLED", "0").lower() in ("1", "true", "yes")
 
-# --- Local endpoint for the Edge J-badge extension (127.0.0.1 only) ---
+# --- Local endpoint for the Edge T-badge extension (127.0.0.1 only) ---
 LOCAL_PORT = 8765
-LOCAL_TOKEN = os.getenv("LOCAL_TOKEN", "pocket-agent-local")
+LOCAL_TOKEN_PATH = PROJECT_ROOT / ".local-token"
+LOCAL_TOKEN = os.getenv("LOCAL_TOKEN", "").strip()
+if not LOCAL_TOKEN and LOCAL_TOKEN_PATH.is_file():
+    LOCAL_TOKEN = LOCAL_TOKEN_PATH.read_text(encoding="utf-8").strip()
+MAX_QUEUED_TASKS = 20
+
+
+def ensure_local_token() -> str:
+    """Create a per-install pairing key once; no file writes during module import."""
+    global LOCAL_TOKEN
+    if LOCAL_TOKEN:
+        if LOCAL_TOKEN == "pocket-agent-local" or len(LOCAL_TOKEN) < 32:
+            raise ValueError("LOCAL_TOKEN must be a private key of at least 32 characters. "
+                             "Remove the old override and run scripts/setup.py to generate one.")
+        return LOCAL_TOKEN
+    try:
+        fd = os.open(LOCAL_TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        LOCAL_TOKEN = LOCAL_TOKEN_PATH.read_text(encoding="utf-8").strip()
+        if not LOCAL_TOKEN:
+            raise ValueError(".local-token is empty; remove it and run scripts/setup.py again.")
+    else:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(secrets.token_urlsafe(32) + "\n")
+        LOCAL_TOKEN = LOCAL_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    return ensure_local_token()

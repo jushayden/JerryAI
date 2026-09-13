@@ -1,4 +1,4 @@
-# Pocket Agent — Phase 2 Build Plan (self-contained; written for a fresh Claude/Opus session)
+# Tora AI — Phase 2 Build Plan (self-contained; written for a fresh Claude/Opus session)
 
 Read this top to bottom before writing code. Every claim about current state below is
 grounded in the code in this repo and in live testing done on 2026-07-03/10 — not in
@@ -6,17 +6,16 @@ intentions. Where something is unverified, it says so.
 
 ## 1. What this project is
 
-Local-first agentic AI ("Pocket Agent") on the user's Windows 11 PC (RTX 5080 16GB,
+Local-first agentic AI ("Tora AI") on the user's Windows 11 PC (RTX 5080 16GB,
 31GB RAM, Python 3.11). Reasoning runs entirely on a local model — **no OpenAI/Anthropic
 API anywhere in the loop**. The user controls it from their phone via a Telegram bot
-(@JerryAAHK_bot) and from a floating "J" badge extension in Edge. Hackathon demo project;
+(your Telegram bot) and from a floating "T" badge extension in Edge. Hackathon demo project;
 the code is real and kept lean: plain module-level async functions, one asyncio process,
 no classes beyond dataclasses, no frameworks beyond what's listed.
 
-Run: `python main.py` (starts everything: mock-form http server on :8000, Ollama check +
-model warm-up, Telegram polling, J-badge endpoint on 127.0.0.1:8765).
+Run: `python main.py` (starts the Ollama check and model warm-up, Telegram polling, and the T-badge endpoint on 127.0.0.1:8765; set `MOCK_FORM_ENABLED=1` for the fixture).
 Stack: Ollama `qwen3-coder:30b` (pinned, `keep_alive:-1`, ~2–4s per warm task),
-python-telegram-bot 22.8, Playwright async (headed Chromium), aiohttp (J-badge endpoint).
+python-telegram-bot 22.8, Playwright async (headed Chromium), aiohttp (T-badge endpoint).
 
 ## 2. Verified current state
 
@@ -40,7 +39,7 @@ python-telegram-bot 22.8, Playwright async (headed Chromium), aiohttp (J-badge e
   (`is_irreversible_click`: type=submit, in-form button, or SUBMIT_WORDS regex),
   inline Approve/Deny keyboard on the phone, timeout=deny, denial string tells the model
   not to retry. Verified live multiple times including a real folder deletion.
-- J badge (`edge_extension/` + `server.py`): content script injects a floating J on every
+- T badge (`edge_extension/` + `server.py`): content script injects a floating T on every
   page, prompt box POSTs {text, url} to 127.0.0.1:8765 with header `X-Pocket-Token`
   (must equal `config.LOCAL_TOKEN`), polls GET /task/{id} for live status. Verified live.
 - Browser form tools (`tools_browser.py`) on cooperative pages (25/25 checks on the local
@@ -83,7 +82,7 @@ python-telegram-bot 22.8, Playwright async (headed Chromium), aiohttp (J-badge e
   timeout while the user was thinking). Machine time is bounded by MAX_STEPS ×
   MODEL_CALL_TIMEOUT; each ask/confirm bounded by CONFIRM_TIMEOUT (300s, timeout=deny).
 - **Telegram is the control channel**: questions and approvals go to the phone even for
-  J-badge tasks (the badge panel shows status text only).
+  T-badge tasks (the badge panel shows status text only).
 - **`num_ctx: 16384` on every Ollama call.** Silent truncation at the 4096 default is the
   classic failure; don't touch this.
 
@@ -117,7 +116,7 @@ python-telegram-bot 22.8, Playwright async (headed Chromium), aiohttp (J-badge e
 ### P0.1 — Co-drive launcher (`edge_codrive.bat`, new file)
 One double-clickable script: warn/confirm → `taskkill /IM msedge.exe` if running →
 relaunch `msedge.exe --remote-debugging-port=9222 --restore-last-session` with the
-user's DEFAULT profile (no --user-data-dir override). Echo "Pocket Agent can now
+user's DEFAULT profile (no --user-data-dir override). Echo "Tora AI can now
 co-drive this browser." Acceptance: after running it, `curl http://127.0.0.1:9222/json/version`
 returns JSON.
 
@@ -140,7 +139,7 @@ window; without it, `python test_browser.py` still passes 25/25 (fallback intact
 - `new_tab(url)` → `_context.new_page()` + goto + digest.
 Follow the existing tool-fn pattern exactly (never raise; digest via `_fresh_digest`).
 Also: in CDP mode, when a task arrives with "(The user is currently looking at this
-page: URL)" (the J badge appends this — see `server.py::_post_task`), the model should
+page: URL)" (the T badge appends this — see `server.py::_post_task`), the model should
 act on that tab. Implement `_page_for_url(url)`: exact-or-prefix match over
 `_context.pages`, and have `browser_goto` switch to a matching open tab instead of
 navigating a fresh one. Add one system-prompt line telling the model to act on the

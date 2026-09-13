@@ -1,9 +1,21 @@
-# Pocket Agent
+# Tora AI
 
 Local-first agentic AI that runs on your PC, reasons on a **local model** (Ollama — no
 cloud API anywhere in the loop), and is **controlled from your phone** via a Telegram
 bot: send a task, the PC does it (files, apps, browser, form-filling from your saved
 profile), your phone gets a report with proof.
+
+## See the website in 30 seconds
+
+```
+git clone https://github.com/jushayden/Tora-AI.git
+cd Tora-AI
+start-website.bat          # Windows          (macOS/Linux: ./start-website.sh)
+```
+
+Then open **<http://localhost:4173/>**. The site in `website/dist` is plain HTML/CSS/JS served by
+Python's built-in server — no Node, no build step, no bot, no model. It never contacts the local
+agent. (Double-clicking `website/dist/index.html` works too.)
 
 > New to this repo? Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** for team setup,
 > secrets handling, and git workflow. Design rationale + build status lives in
@@ -13,7 +25,7 @@ profile), your phone gets a report with proof.
 
 ```
 phone (Telegram, any network) ⇄ Telegram servers ⇄ long polling ⇄ bridge.py
-   Edge "J" badge ⇄ 127.0.0.1:8765 ⇄ server.py ─────────────────────┘
+   Edge "T" badge ⇄ 127.0.0.1:8765 ⇄ server.py ─────────────────────┘
                                              task queue (serial) → agent.py (Ollama tool loop)
                                                   ├─ tools_fs.py       files, apps, screenshots, file-picker
                                                   ├─ tools_browser.py  Playwright — co-drive your real Edge
@@ -64,11 +76,11 @@ choose, and gates every submit. Files: `tools_browser.py`, `tools_fs.py`, `agent
 ### Track C — Social + news briefing  (browser tools built)
 - **News**: a `/news` command — no new tool, just a canned task using the existing browser
   tools (DuckDuckGo HTML → read top sources) over an `interests:` list in your profile.
-- **Social reading**: co-drive only — you open your X/IG/TikTok/FB feed in Edge, hit the J
+- **Social reading**: co-drive only — you open your X/IG/TikTok/FB feed in Edge, hit the T
   badge with "summarize what's new", the agent reads the rendered page. Stops if a platform
   blocks it.
 - **Posting through the visible Edge UI** is high-impact and always requires a fresh
-  Telegram approval showing the destination and exact content. Jerry never bypasses
+  Telegram approval showing the destination and exact content. Tora never bypasses
   platform controls.
 
 ---
@@ -90,8 +102,11 @@ choose, and gates every submit. Files: `tools_browser.py`, `tools_fs.py`, `agent
 python main.py
 ```
 
-Starts the mock-form server (:8000), warms the model, starts the bot + J-badge endpoint.
-On your phone: `/start` once (registers you as owner), then just text tasks.
+Warms the model, starts the bot, and starts the T-badge endpoint. Set `MOCK_FORM_ENABLED=1` for the local development fixture.
+On Windows, `start-agent.bat` runs the same thing from `.venv` after checking the prerequisites, and
+`start-website.bat` serves the product site on <http://127.0.0.1:4173/> with no agent, bot, or model
+needed (see [QUICKSTART.md](QUICKSTART.md)).
+On your phone: send `/start` to display your chat ID, put it in `ALLOWED_CHAT_ID` in `.env`, restart, then send `/start` again. Only the configured chat can control Tora.
 
 - `/inbox` — email briefing (needs Gmail OAuth)
 - `/remember key: value` — teach the agent a fact to reuse (e.g. `/remember work authorization: US citizen`)
@@ -99,15 +114,15 @@ On your phone: `/start` once (registers you as owner), then just text tasks.
 
 ## Co-drive your real browser (the app-filler demo)
 
-For real sites, the agent works inside a persistent **Jerry Edge profile**. Modern Edge
+For real sites, the agent works inside a persistent **Tora Edge profile**. Modern Edge
 rejects remote debugging on the default profile, so sign into required sites once in this
 dedicated profile; its cookies, logins, and tabs persist between sessions:
 
 1. Optionally double-click **`edge_codrive.bat`** to enable co-drive ahead of time. If Edge
-   is closed, Jerry starts it automatically. If it is already open without co-drive, Jerry
+   is closed, Tora starts it automatically. If it is already open without co-drive, Tora
    asks on Telegram before closing and restoring it.
 2. Navigate to the page yourself (e.g. a Greenhouse/Lever job posting) and stay there.
-3. From the phone or the **J badge** (load once: `edge://extensions` → Developer mode →
+3. From the phone or the **T badge** (load once: `edge://extensions` → Developer mode →
    Load unpacked → `edge_extension/`): "fill this application using my profile."
 4. Watch fields fill in your own tab. Unknown field → it asks you on Telegram. Resume field
    → it finds/asks for the file. **Submit → approval card on your phone with every value.**
@@ -120,7 +135,7 @@ Production tasks never silently fall back to a separate browser profile. Set
 ## Remote browser work from Telegram
 
 With `python main.py` running and the PC awake, send a research, itinerary, scraping, or
-form task directly to Telegram. Jerry opens task-owned Edge tabs, edits one live status
+form task directly to Telegram. Tora opens task-owned Edge tabs, edits one live status
 card, asks for missing information or high-impact approvals, and finishes with a sourced
 summary, screenshot, generated data/download artifacts, and a timestamped audit file.
 
@@ -130,7 +145,7 @@ summary, screenshot, generated data/download artifacts, and a timestamped audit 
    autonomous file op + report + on-disk verification.
 2. "Open Notepad." — instant PC control.
 3. **Co-drive job application** (centerpiece): run `edge_codrive.bat`, open a real posting,
-   J-badge "fill this using my profile, don't submit yet." Watch it fill, ask a clarifying
+   T-badge "fill this using my profile, don't submit yet." Watch it fill, ask a clarifying
    question, attach your resume; then approve the submit from your phone.
 4. `/inbox` — local model reads your Gmail and briefs you, flagging what matters.
 5. `/brief` — the session digest.
@@ -147,10 +162,14 @@ summary, screenshot, generated data/download artifacts, and a timestamped audit 
       fallback is best-effort; the gate is rules-first; the agent stops at
       CAPTCHAs by design (it won't solve them).
 
+## Product website
+
+The polished Tora AI presentation site lives in [`website/dist/`](website/dist/). It is a dependency-free static site with an interactive WebGL agent core, responsive navigation, capability and workflow sections, an unconnected live-demo slot, and downloadable source packages. Serve it locally with `start-website.bat` (or `python -m http.server 4173 --bind 127.0.0.1 --directory website/dist`). The site never contacts the loopback agent or includes credentials. See [`website/README.md`](website/README.md) and [`RELEASE.md`](RELEASE.md) for packaging.
+
 ## Tests
 
 `python test_state.py` · `python test_tools_fs.py` · `python test_remote_operator.py` ·
-`python test_vision.py` · `python test_browser.py`
+`python test_vision.py` · `python test_server.py` · `python test_browser.py`
 (browser test opens a visible Chromium window and drives the mock form end to end)
 
 After pulling the vision model, run `python test_vision.py --real` for the local-model smoke test.

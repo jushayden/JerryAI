@@ -24,7 +24,7 @@ pip install --user google-api-python-client google-auth-oauthlib
 ## 3. Configure the OAuth consent screen
 
 1. Menu → **APIs & Services → OAuth consent screen** (a.k.a. "Google Auth Platform").
-2. User type: **External** → Create. App name e.g. `Pocket Agent`, pick your email
+2. User type: **External** → Create. App name e.g. `Tora AI`, pick your email
    for support/developer contact. Save through the steps (scopes can be skipped).
 3. Under **Audience / Test users**: **Add users** → add **your own Gmail address**.
    Leave publishing status as **Testing** — no Google verification needed.
@@ -46,7 +46,7 @@ opens **once**:
 
 1. Pick your Gmail account.
 2. On "Google hasn't verified this app" click **Continue** (or Advanced → Go to
-   Pocket Agent). This appears because the app is in Testing mode — that's fine.
+   Tora AI). This appears because the app is in Testing mode — that's fine.
 3. Allow **read-only** Gmail access.
 
 A `token.json` is then saved next to `credentials.json` and reused from then on —

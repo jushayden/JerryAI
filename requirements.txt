@@ -4,3 +4,5 @@ playwright>=1.60
 pyyaml
 python-dotenv
 mss
+aiohttp>=3.9,<4
+socksio>=1.0

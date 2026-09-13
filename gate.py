@@ -1,4 +1,4 @@
-"""Deterministic safety gate for Pocket Agent. Pure rules, no I/O.
+"""Deterministic safety gate for Tora AI. Pure rules, no I/O.
 
 Decides which clicks are irreversible (need human approval) and renders
 the approval-card text. Biased toward over-gating: when in doubt, gate.

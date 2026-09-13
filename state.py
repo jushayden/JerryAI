@@ -1,4 +1,4 @@
-"""Task records, queue, audit trails, and event logging for Pocket Agent."""
+"""Task records, queue, audit trails, and event logging for Tora AI."""
 import asyncio
 import json
 import re
@@ -152,7 +152,7 @@ def write_audit(task: TaskRecord) -> Path:
     config.ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     path = config.ARTIFACT_DIR / f"task_{task.id}_audit.txt"
     lines = [
-        f"Jerry task audit: {task.id}",
+        f"Tora task audit: {task.id}",
         f"Origin: {task.origin}",
         f"Request: {redact_text(task.text)}",
         f"Status: {task.status}",

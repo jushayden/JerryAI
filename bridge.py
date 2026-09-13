@@ -1,4 +1,4 @@
-"""Telegram phone bridge for Pocket Agent (Track A).
+"""Telegram phone bridge for Tora AI (Track A).
 
 Manual PTB v22 init — main.py owns the event loop, never app.run_polling().
 """
@@ -20,6 +20,7 @@ from telegram.ext import (
 
 import config
 import state
+import tools_fs
 from state import TaskRecord
 
 # --- module state ---
@@ -43,6 +44,7 @@ class _Secret:
 
 
 _secrets: dict[str, _Secret] = {}
+_consumed_secrets: dict[str | None, set[str]] = {}
 
 
 async def _default_agent(task: TaskRecord) -> str:
@@ -82,9 +84,9 @@ async def send_text(text: str) -> None:
 
 
 async def notify_task_accepted(task: TaskRecord) -> None:
-    """Notify the phone when a task originated outside Telegram (the J badge)."""
+    """Notify the phone when a task originated outside Telegram (the T badge)."""
     await send_text(
-        f"J badge task {task.id} accepted.\n"
+        f"T badge task {task.id} accepted.\n"
         f"Page: {task.source_url or '(not provided)'}\n"
         f"Request: {task.text}"
     )
@@ -114,7 +116,7 @@ async def request_secret(
     where = f" for {domain}" if domain else ""
     await send_text(
         f"🔐 {question}{where}\n"
-        "Reply with the value. It will be held in memory for one use and redacted from Jerry's logs."
+        "Reply with the value. It will be held in memory for one use and redacted from Tora's logs."
     )
     try:
         return await asyncio.wait_for(fut, config.CONFIRM_TIMEOUT)
@@ -132,7 +134,8 @@ async def consume_secret(handle: str, *, task_id: str | None = None) -> str:
     if task_id and secret.task_id and task_id != secret.task_id:
         _secrets[handle] = secret
         raise ValueError("secret handle belongs to a different task")
-    state.forget_secret(secret.value)
+    # Keep redaction active after consumption: Playwright errors can quote input.
+    _consumed_secrets.setdefault(secret.task_id, set()).add(secret.value)
     return secret.value
 
 
@@ -141,6 +144,10 @@ def clear_task_secrets(task_id: str | None) -> None:
         if task_id is None or secret.task_id == task_id:
             state.forget_secret(secret.value)
             _secrets.pop(handle, None)
+    for owner in list(_consumed_secrets):
+        if task_id is None or owner == task_id:
+            for value in _consumed_secrets.pop(owner):
+                state.forget_secret(value)
 
 
 # --- confirm / ask ---
@@ -331,18 +338,18 @@ def _is_allowed(update: Update) -> bool:
 
 # --- handlers ---
 async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _allowed_chat_id
+    if update.effective_chat is None or update.message is None:
+        return
     chat_id = update.effective_chat.id
     if _allowed_chat_id == 0:
-        _allowed_chat_id = chat_id
-        _write_env_chat_id(chat_id)
-        state.log_event({"event": "owner_captured", "chat_id": chat_id})
-        await update.message.reply_text("You're registered as owner")
+        await update.message.reply_text(
+            f"Tora is not paired. On your computer, set ALLOWED_CHAT_ID={chat_id} "
+            "in .env, restart Tora, then send /start again.")
         return
     if chat_id != _allowed_chat_id:
         return
     await update.message.reply_text(
-        "Pocket Agent ready. Send a task, "
+        "Tora AI ready. Send a task, "
         "/brief, /status, /cancel.")
 
 
@@ -369,6 +376,9 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _pending_ask is not None and not _pending_ask.done():
         fut, _pending_ask = _pending_ask, None
         fut.set_result(text)
+        return
+    if state.queue.qsize() >= config.MAX_QUEUED_TASKS:
+        await update.message.reply_text("The task queue is full. Wait for a task to finish.")
         return
     ahead = state.queue.qsize() + (1 if state.current is not None else 0)
     task = state.new_task(text, origin="telegram")
@@ -413,7 +423,13 @@ async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             state.mark(state.current, "cancelled")
             clear_task_secrets(state.current.id)
         _current_run_task.cancel()
-    await update.message.reply_text("Stopped.")
+    queued = 0
+    while not state.queue.empty():
+        pending = state.queue.get_nowait()
+        state.mark(pending, "cancelled")
+        state.queue.task_done()
+        queued += 1
+    await update.message.reply_text(f"Stopped. Cleared {queued} queued task(s).")
 
 
 async def _on_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -440,8 +456,10 @@ async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Usage: /remember key: value")
         return
     try:
-        with open(config.PROFILE_EXTRA_PATH, "a", encoding="utf-8") as f:
-            f.write(f"{key}: {value}\n")
+        result = await tools_fs.remember_fact({"key": key, "value": value})
+        if result.startswith("Error:"):
+            await update.message.reply_text(result)
+            return
         state.log_event({"event": "remember", "key": key})
         await update.message.reply_text(f"Got it — I'll remember {key} = {value}.")
     except Exception as e:
@@ -492,6 +510,7 @@ async def _worker() -> None:
     while True:
         task = await state.queue.get()
         if task.status == "cancelled":
+            state.queue.task_done()
             continue
         state.current = task
         state.mark(task, "running")
@@ -525,6 +544,10 @@ async def _worker() -> None:
                                  "error": str(e)})
             finally:
                 clear_task_secrets(task.id)
+                card = _status_cards.pop(task.id, None)
+                if card and card.get("flusher"):
+                    card["flusher"].cancel()
+                state.queue.task_done()
 
 
 # --- lifecycle ---
@@ -536,6 +559,7 @@ async def start_bridge() -> None:
             "BOT_TOKEN is empty — create a bot with @BotFather and put "
             "BOT_TOKEN=<token> in .env at the project root.")
     app = Application.builder().token(config.BOT_TOKEN).build()
+    _app = app  # Allow main's finally block to clean up partial startup failures.
     app.add_handler(CommandHandler("start", _on_start))
     app.add_handler(CommandHandler("brief", _on_brief))
     app.add_handler(CommandHandler("status", _on_status))

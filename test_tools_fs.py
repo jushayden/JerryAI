@@ -1,5 +1,6 @@
 """Plain-assert tests for tools_fs.py. Run: python test_tools_fs.py"""
 import asyncio
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -11,6 +12,8 @@ import tools_fs
 async def main():
     tmp = (config.SANDBOX_ROOT / f"_pocket_agent_test_{uuid.uuid4().hex[:8]}").resolve()
     tmp.mkdir(parents=True)
+    original_extra = config.PROFILE_EXTRA_PATH
+    config.PROFILE_EXTRA_PATH = tmp / "profile_extra.yaml"  # keep test facts out of the real profile
     try:
         # --- write / read round-trip ---
         f = tmp / "sub" / "hello.txt"
@@ -85,25 +88,37 @@ async def main():
         assert "notepad" in r and "calculator" in r
         print("PASS open_app rejects unknown app (nothing launched)")
 
-        # --- read_profile fallback ---
+        # --- remember_fact writes valid YAML and updates existing keys ---
+        r = await tools_fs.remember_fact({"key": "work authorization", "value": "US citizen: yes"})
+        assert r.startswith("Remembered: work authorization"), r
+        facts = await tools_fs.remember_fact({"key": "work authorization", "value": "US citizen: confirmed"})
+        assert facts.startswith("Remembered:"), facts
+        saved = config.PROFILE_EXTRA_PATH.read_text(encoding="utf-8")
+        assert "US citizen: confirmed" in saved and saved.count("work authorization") == 1, saved
+        print("PASS remember_fact writes valid YAML without duplicate keys")
+
+        # --- read_profile refuses missing real profile ---
         r = await tools_fs.read_profile({})
         if not config.PROFILE_PATH.exists():
-            assert r.startswith("(demo persona — profile.yaml not filled in yet)\n"), r[:80]
-            print("PASS read_profile demo-persona fallback")
+            assert r.startswith("Error: profile.yaml is missing."), r[:100]
+            print("PASS read_profile refuses missing real profile")
         else:
             assert not r.startswith("Error"), r
             print("PASS read_profile (real profile.yaml present)")
 
-        # --- take_screenshot: real PNG > 10KB ---
-        r = await tools_fs.take_screenshot({})
-        assert r.startswith("screenshot saved: "), r
-        shot = Path(r.removeprefix("screenshot saved: "))
-        assert shot.exists() and shot.suffix == ".png"
-        size = shot.stat().st_size
-        assert size > 10 * 1024, f"screenshot too small: {size} bytes"
-        assert shot.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
-        shot.unlink()
-        print(f"PASS take_screenshot ({size} bytes PNG, deleted after check)")
+        # --- take_screenshot: real PNG > 10KB (requires a desktop session) ---
+        if os.name != "nt" and not os.environ.get("DISPLAY"):
+            print("SKIP take_screenshot (no desktop display in this headless runner)")
+        else:
+            r = await tools_fs.take_screenshot({})
+            assert r.startswith("screenshot saved: "), r
+            shot = Path(r.removeprefix("screenshot saved: "))
+            assert shot.exists() and shot.suffix == ".png"
+            size = shot.stat().st_size
+            assert size > 10 * 1024, f"screenshot too small: {size} bytes"
+            assert shot.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+            shot.unlink()
+            print(f"PASS take_screenshot ({size} bytes PNG, deleted after check)")
 
         # --- registry contract shape ---
         for name, entry in tools_fs.TOOLS.items():
@@ -116,6 +131,7 @@ async def main():
 
         print("\nALL TESTS PASSED")
     finally:
+        config.PROFILE_EXTRA_PATH = original_extra
         shutil.rmtree(tmp, ignore_errors=True)
 
 
